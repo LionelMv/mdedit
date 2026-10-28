@@ -21,6 +21,8 @@ A WYSIWYG ("live preview") Markdown editor with the feature set of
 
 | File | What it covers |
 |------|----------------|
+| [user-guide.md](user-guide.md) | How to use mdedit: files, tabs, outline, formatting, status bar, preferences, recovery |
+| [issues.md](issues.md) | Known gaps and follow-ups to implement later |
 | [architecture.md](architecture.md) | Technology choices, crate layout, data flow, performance strategy |
 | [implementation-plan.md](implementation-plan.md) | Step-by-step phases (M0–M9), each with tasks and "done when" criteria |
 | [feature-parity.md](feature-parity.md) | MarkText feature checklist mapped to the phase that delivers it |
