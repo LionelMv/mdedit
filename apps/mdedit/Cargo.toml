@@ -26,6 +26,8 @@ env_logger.workspace = true
 regex.workspace = true
 # Only to enable colour emoji (COLR/CBDT) rendering in egui's text stack.
 epaint = { version = "0.37", default-features = false, features = ["color_fonts"] }
+# Only to get proper Wayland title-bar buttons (the fallback frame draws blank squares).
+winit = { version = "0.30", default-features = false, features = ["wayland-csd-adwaita"] }
 
 [dev-dependencies]
 tempfile.workspace = true
