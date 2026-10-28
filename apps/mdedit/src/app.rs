@@ -708,7 +708,13 @@ impl MdApp {
             A::About => self.about_open = true,
             A::ShortcutsHelp => self.shortcuts_open = true,
             A::Cheatsheet => {
-                let idx = self.push_tab(Document::from_text(dialogs::CHEATSHEET));
+                const NAME: &str = "Markdown Cheatsheet";
+                let open = self.tabs.iter().position(|t| t.doc.path.is_none() && t.doc.name.as_deref() == Some(NAME));
+                let idx = open.unwrap_or_else(|| {
+                    let mut doc = Document::from_text(dialogs::CHEATSHEET);
+                    doc.name = Some(NAME.into());
+                    self.push_tab(doc)
+                });
                 self.activate(idx);
             }
         }

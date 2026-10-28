@@ -306,3 +306,13 @@ proptest! {
         prop_assert_eq!(b.text(), init);
     }
 }
+
+#[test]
+fn document_title_prefers_path_then_name() {
+    let mut d = Document::new();
+    assert_eq!(d.title(), "Untitled");
+    d.name = Some("Markdown Cheatsheet".into());
+    assert_eq!(d.title(), "Markdown Cheatsheet");
+    d.path = Some("/tmp/notes.md".into());
+    assert_eq!(d.title(), "notes.md");
+}

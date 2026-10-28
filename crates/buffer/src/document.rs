@@ -50,6 +50,8 @@ pub struct Document {
     pub buffer: Buffer,
     /// `None` for an unsaved new document.
     pub path: Option<PathBuf>,
+    /// Title for a document without a path (e.g. the built-in cheatsheet).
+    pub name: Option<String>,
     pub line_ending: LineEnding,
     pub bom: bool,
     saved_version: u64,
@@ -63,7 +65,7 @@ impl Default for Document {
 
 impl Document {
     pub fn new() -> Self {
-        Self { buffer: Buffer::default(), path: None, line_ending: LineEnding::Lf, bom: false, saved_version: 0 }
+        Self { buffer: Buffer::default(), path: None, name: None, line_ending: LineEnding::Lf, bom: false, saved_version: 0 }
     }
     /// A document from text not tied to a file (normalizes line endings).
     ///
@@ -72,7 +74,7 @@ impl Document {
         let (normalized, line_ending, bom) = normalize_text(text);
         let buffer = Buffer::new(&normalized);
         let saved_version = buffer.version();
-        Self { buffer, path: None, line_ending, bom, saved_version }
+        Self { buffer, path: None, name: None, line_ending, bom, saved_version }
     }
     /// Read a file. Rejects non-UTF-8 with `InvalidData`. Strips and remembers a BOM, detects
     /// the dominant line ending and normalizes to `\n`. Files over 200 MB are refused
@@ -137,9 +139,12 @@ impl Document {
     pub fn is_dirty(&self) -> bool {
         self.buffer.version() != self.saved_version
     }
-    /// File name, or "Untitled".
+    /// File name, else `name`, else "Untitled".
     pub fn title(&self) -> String {
-        self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Untitled".into())
+        match self.path.as_ref().and_then(|p| p.file_name()) {
+            Some(n) => n.to_string_lossy().into_owned(),
+            None => self.name.clone().unwrap_or_else(|| "Untitled".into()),
+        }
     }
     /// Mark the current version as saved (used after reload).
     pub fn mark_saved(&mut self) {
