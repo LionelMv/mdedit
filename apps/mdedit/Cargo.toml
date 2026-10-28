@@ -3,6 +3,8 @@ name = "mdedit"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Fast native Markdown editor with live preview"
+repository = "https://github.com/LionelMv/mdedit"
 
 [lints]
 workspace = true
