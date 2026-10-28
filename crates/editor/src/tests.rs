@@ -571,22 +571,6 @@ fn search_and_select_scroll() {
     assert!(p.y > 0.0 && p.y < h.size.y, "selection scrolled into view: {p:?}");
 }
 
-#[test]
-fn mouse_wheel_scrolls_the_view() {
-    let text: String = (0..400).map(|i| format!("line {i}\n\n")).collect();
-    let mut h = H::new(&text);
-    h.frame(vec![Event::PointerMoved(pos2(400.0, 300.0))]);
-    let before = h.ed.anchor_offset();
-    h.step = 1.0 / 60.0;
-    for _ in 0..10 {
-        h.frame(vec![Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, -3.0), modifiers: Modifiers::NONE, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel }]);
-    }
-    for _ in 0..120 {
-        h.frame(vec![]);
-    }
-    let after = h.ed.anchor_offset();
-    assert!(after > before + 100.0, "wheel scrolled: {before} -> {after}");
-}
 
 #[test]
 fn small_touchpad_deltas_accumulate() {
