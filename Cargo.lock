@@ -2327,6 +2327,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_extras",
+ "egui_kittest",
  "env_logger",
  "epaint",
  "image",

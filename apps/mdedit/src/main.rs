@@ -12,6 +12,8 @@ mod sidebar;
 mod tabs;
 mod theme;
 mod toast;
+#[cfg(test)]
+mod ui_tests;
 
 use cli::Cli;
 

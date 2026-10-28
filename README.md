@@ -22,6 +22,7 @@ Set `MDEDIT_HOME=/some/dir` to keep everything in one folder (used by tests).
 ```bash
 ~/.cargo/bin/cargo test --workspace
 ~/.cargo/bin/cargo clippy --workspace --all-targets
+MDEDIT_HOME=$(mktemp -d) MDEDIT_SHOT_DIR=/tmp/shots cargo test -p mdedit ui_tests -- --ignored   # whole-app screenshot checks (GPU)
 RUST_LOG=mdedit_editor=debug mdedit big.md     # per-edit model rebuild timings
 python3 -I scripts/gen-big.py /tmp/big && scripts/bench.sh ~/.local/bin/mdedit /tmp/big/big1m.md
 ```

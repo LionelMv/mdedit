@@ -93,6 +93,8 @@ pub struct EditorState {
     counts_dirty: bool,
     image_guard: std::cell::RefCell<images::ImageGuard>,
     stats: FrameStats,
+    /// Font atlas fill ratio after the last `show`; a drop means egui wiped the atlas.
+    atlas_fill: f32,
 }
 
 /// Debug counters for the last frame (tests, profiling). Added API.
@@ -271,6 +273,7 @@ impl EditorState {
             counts_dirty: false,
             image_guard: Default::default(),
             stats: FrameStats::default(),
+            atlas_fill: 0.0,
         }
     }
 
@@ -287,6 +290,11 @@ impl EditorState {
         let start_version = doc.buffer.version();
         let mut out = EditorOutput::default();
 
+        // egui wipes the font atlas when it gets full; cached galleys then point at the wrong
+        // glyphs and draw as gibberish, so drop them.
+        if ui.ctx().fonts(|f| f.font_atlas_fill_ratio()) < self.atlas_fill {
+            self.cache.clear();
+        }
         if self.last_theme.as_ref() != Some(theme) {
             self.theme_gen += 1;
             self.last_theme = Some(theme.clone());
@@ -364,6 +372,7 @@ impl EditorState {
         out.chars = self.model.counts.1;
         out.changed = out.changed || doc.buffer.version() != start_version;
         self.stats.chunks = self.model.chunks.len();
+        self.atlas_fill = ui.ctx().fonts(|f| f.font_atlas_fill_ratio());
         out
     }
 

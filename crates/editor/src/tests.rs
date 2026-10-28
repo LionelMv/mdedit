@@ -605,3 +605,19 @@ fn idle_empty_preedit_does_not_pin_the_view() {
     let after = h.ed.anchor_offset();
     assert!(after > before + 100.0, "scrolled despite idle IME: {before} -> {after}");
 }
+
+#[test]
+fn font_atlas_reset_relays_cached_text() {
+    let mut h = H::new("# Title\n\nSome text.\n");
+    h.frame(vec![]);
+    assert_eq!(h.ed.frame_stats().layouts, 0, "warm cache");
+    // Fill the atlas past egui's 80% threshold; the next pass wipes it.
+    let mut size = 20.0;
+    while h.ctx.fonts(|f| f.font_atlas_fill_ratio()) <= 0.8 {
+        let text: String = ('!'..='~').collect();
+        h.ctx.fonts_mut(|f| f.layout_no_wrap(text, egui::FontId::proportional(size), Color32::WHITE));
+        size += 3.0;
+    }
+    h.frame(vec![]);
+    assert!(h.ed.frame_stats().layouts > 0, "cached galleys must be re-laid after an atlas reset");
+}
