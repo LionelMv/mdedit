@@ -334,7 +334,9 @@ impl EditorState {
             .show_viewport(ui, |ui, viewport| self.viewport_ui(ui, viewport, &env, doc, id, has_focus, &mut out));
         let new_off = scroll.state.clamped_offset().y;
         self.view_h = scroll.inner_rect.height().max(1.0);
-        if (new_off - offset).abs() > 0.5 {
+        // Any change came from the wheel or scrollbar. Touchpads send sub-pixel deltas every
+        // frame, so even tiny moves must re-anchor or they are lost.
+        if new_off != offset {
             self.anchor = self.anchor_from_offset(new_off);
         }
 
@@ -1272,6 +1274,11 @@ impl EditorState {
                 }
                 Event::Ime(ime) => match ime {
                     ImeEvent::Preedit { text, .. } => {
+                        // Some IMEs (IBus on Wayland) send an empty preedit every frame while idle;
+                        // only a real composition may move the caret into view.
+                        if text.is_empty() && !ime_active {
+                            continue;
+                        }
                         self.preedit = if text.is_empty() { None } else { Some(text.clone()) };
                         if self.preedit.is_some() && !doc.buffer.selection.is_empty() {
                             // Composition replaces the selection.

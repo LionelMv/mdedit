@@ -13,6 +13,7 @@ struct H {
     time: f64,
     size: Vec2,
     platform: egui::PlatformOutput,
+    step: f64,
 }
 
 impl H {
@@ -28,6 +29,7 @@ impl H {
             time: 10.0,
             size: vec2(800.0, 600.0),
             platform: Default::default(),
+            step: 1.0,
         };
         h.frame(vec![]);
         h.frame(vec![]);
@@ -39,7 +41,7 @@ impl H {
     }
 
     fn frame_at(&mut self, events: Vec<Event>, modifiers: Modifiers) -> EditorOutput {
-        self.time += 1.0;
+        self.time += self.step;
         let mut events = events;
         events.insert(0, Event::ModifiersChanged(modifiers));
         let input = RawInput {
@@ -567,4 +569,55 @@ fn search_and_select_scroll() {
     h.frame(vec![]);
     let p = h.pos_of(at);
     assert!(p.y > 0.0 && p.y < h.size.y, "selection scrolled into view: {p:?}");
+}
+
+#[test]
+fn mouse_wheel_scrolls_the_view() {
+    let text: String = (0..400).map(|i| format!("line {i}\n\n")).collect();
+    let mut h = H::new(&text);
+    h.frame(vec![Event::PointerMoved(pos2(400.0, 300.0))]);
+    let before = h.ed.anchor_offset();
+    h.step = 1.0 / 60.0;
+    for _ in 0..10 {
+        h.frame(vec![Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, -3.0), modifiers: Modifiers::NONE, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel }]);
+    }
+    for _ in 0..120 {
+        h.frame(vec![]);
+    }
+    let after = h.ed.anchor_offset();
+    assert!(after > before + 100.0, "wheel scrolled: {before} -> {after}");
+}
+
+#[test]
+fn small_touchpad_deltas_accumulate() {
+    // Wayland touchpads send many sub-pixel deltas; each must move the view.
+    let text: String = (0..400).map(|i| format!("line {i}\n\n")).collect();
+    let mut h = H::new(&text);
+    h.step = 1.0 / 60.0;
+    h.frame(vec![Event::PointerMoved(pos2(400.0, 300.0))]);
+    let before = h.ed.anchor_offset();
+    for _ in 0..120 {
+        h.frame(vec![Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -0.4), modifiers: Modifiers::NONE, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Unknown }]);
+    }
+    let after = h.ed.anchor_offset();
+    assert!(after > before + 30.0, "touchpad scrolled: {before} -> {after}");
+}
+
+#[test]
+fn idle_empty_preedit_does_not_pin_the_view() {
+    // IBus on Wayland sends an empty preedit every frame; it must not snap back to the caret.
+    let text: String = (0..400).map(|i| format!("line {i}\n\n")).collect();
+    let mut h = H::new(&text);
+    h.step = 1.0 / 60.0;
+    h.frame(vec![Event::PointerMoved(pos2(400.0, 300.0))]);
+    let before = h.ed.anchor_offset();
+    let idle = || Event::Ime(ImeEvent::Preedit { text: String::new(), active_range_chars: None });
+    for _ in 0..20 {
+        h.frame(vec![idle(), Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -15.0), modifiers: Modifiers::NONE, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Unknown }]);
+    }
+    for _ in 0..10 {
+        h.frame(vec![idle()]);
+    }
+    let after = h.ed.anchor_offset();
+    assert!(after > before + 100.0, "scrolled despite idle IME: {before} -> {after}");
 }
