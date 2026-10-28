@@ -49,6 +49,24 @@ Notes:
 
 ## 2. Build
 
+### Release build (Ubuntu 24.04 and newer)
+
+A `.deb` requires at least the glibc it was built against, so release packages are built in
+an Ubuntu 24.04 container (glibc 2.39). They install on Ubuntu 24.04+ and other distros with
+glibc 2.39 or newer.
+
+```bash
+sudo apt install podman                       # once (or use docker)
+./scripts/build-deb.sh                        # writes target/ubuntu-24.04/debian/mdedit_*.deb
+```
+
+The first run downloads the Ubuntu image, a Rust toolchain and the crates (cached in the
+`mdedit-deb-cargo` volume for later runs).
+
+### Local build (this machine only)
+
+A build on the host requires the host's glibc, so it is only for testing here.
+
 ```bash
 ~/.cargo/bin/cargo install cargo-deb          # once
 ~/.cargo/bin/cargo deb -p mdedit              # builds release + writes target/debian/mdedit_0.1.0-1_amd64.deb
