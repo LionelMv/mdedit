@@ -29,3 +29,7 @@ python3 -I scripts/gen-big.py /tmp/big && scripts/bench.sh ~/.local/bin/mdedit /
 
 Layout: `crates/{buffer,syntax,highlight,style,editor,workspace,export}` and `apps/mdedit`.
 Design docs are in `docs/` (start with `docs/README.md`).
+
+## License
+
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

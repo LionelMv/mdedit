@@ -35,16 +35,18 @@ egui_kittest = { version = "0.37", features = ["eframe", "wgpu"] }
 
 [package.metadata.deb]
 name = "mdedit"
-maintainer = "The mdedit developers"
-copyright = "The mdedit developers"
+maintainer = "Lionel <mvangicode@gmail.com>"
+copyright = "2026, Lionel <mvangicode@gmail.com>"
 license-file = []
 extended-description = """\
 mdedit is a fast, native Markdown editor with live preview, syntax-highlighted \
-code blocks, tabs, a folder sidebar and outline, find/replace, sanitized HTML \
-export, and autosave with crash recovery."""
+code blocks with one-click copy, tabs, a document outline, find/replace, sanitized \
+HTML export, and crash recovery for unsaved changes."""
 section = "editors"
 priority = "optional"
-depends = "$auto"
+# eframe/winit load the GL, EGL, xkbcommon and Wayland libraries with dlopen, so
+# dpkg-shlibdeps ($auto) cannot see them.
+depends = "$auto, libgl1, libegl1, libxkbcommon0, libwayland-client0, libwayland-egl1"
 assets = [
     ["target/release/mdedit", "usr/bin/", "755"],
     ["../../packaging/linux/io.github.mdedit.mdedit.desktop", "usr/share/applications/", "644"],
@@ -54,4 +56,6 @@ assets = [
     ["../../packaging/linux/icons/io.github.mdedit.mdedit-128.png", "usr/share/icons/hicolor/128x128/apps/io.github.mdedit.mdedit.png", "644"],
     ["../../packaging/linux/icons/io.github.mdedit.mdedit-256.png", "usr/share/icons/hicolor/256x256/apps/io.github.mdedit.mdedit.png", "644"],
     ["../../packaging/linux/icons/io.github.mdedit.mdedit-512.png", "usr/share/icons/hicolor/512x512/apps/io.github.mdedit.mdedit.png", "644"],
+    ["../../LICENSE-MIT", "usr/share/doc/mdedit/", "644"],
+    ["../../LICENSE-APACHE", "usr/share/doc/mdedit/", "644"],
 ]
