@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.mdedit.mdedit</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>mdedit</name>
+  <summary>Fast native Markdown editor with live preview</summary>
+  <developer id="io.github.mdedit">
+    <name>The mdedit developers</name>
+  </developer>
+  <description>
+    <p>
+      mdedit is a lightweight Markdown editor that renders your document as you type,
+      while keeping the plain-text source exactly as you wrote it.
+    </p>
+    <ul>
+      <li>Live preview and source modes</li>
+      <li>Syntax highlighting for fenced code blocks</li>
+      <li>Opens multi-megabyte documents quickly</li>
+      <li>Tabs, folder sidebar and document outline</li>
+      <li>Find and replace</li>
+      <li>Export to sanitized, self-contained HTML</li>
+      <li>Autosave and crash recovery</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.mdedit.mdedit.desktop</launchable>
+  <icon type="stock">io.github.mdedit.mdedit</icon>
+  <categories>
+    <category>Utility</category>
+    <category>TextEditor</category>
+  </categories>
+  <keywords>
+    <keyword>markdown</keyword>
+    <keyword>editor</keyword>
+    <keyword>notes</keyword>
+  </keywords>
+  <provides>
+    <binary>mdedit</binary>
+    <mediatype>text/markdown</mediatype>
+  </provides>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-10-28">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- shadow -->
+  <path d="M118 52 L338 52 L434 148 L434 474 Q434 494 414 494 L118 494 Q98 494 98 474 L98 72 Q98 52 118 52 Z"
+        fill="#000000" fill-opacity="0.18"/>
+  <!-- page -->
+  <path d="M112 36 L332 36 L428 132 L428 460 Q428 480 408 480 L112 480 Q92 480 92 460 L92 56 Q92 36 112 36 Z"
+        fill="#f7f9fc" stroke="#9aa6b8" stroke-width="6" stroke-linejoin="round"/>
+  <!-- folded corner -->
+  <path d="M332 36 L332 112 Q332 132 352 132 L428 132 Z"
+        fill="#cfd6e1" stroke="#9aa6b8" stroke-width="6" stroke-linejoin="round"/>
+  <!-- text lines -->
+  <rect x="136" y="110" width="160" height="16" rx="8" fill="#b8c2d1"/>
+  <rect x="136" y="152" width="116" height="16" rx="8" fill="#b8c2d1"/>
+  <rect x="136" y="428" width="248" height="16" rx="8" fill="#b8c2d1"/>
+  <!-- badge -->
+  <rect x="124" y="214" width="272" height="184" rx="28" fill="#2f5cc4"/>
+  <!-- M -->
+  <polygon fill="#ffffff"
+           points="152,370 152,250 178,250 206,290 234,250 260,250 260,370 234,370 234,296 206,334 178,296 178,370"/>
+  <!-- down arrow -->
+  <polygon fill="#ffffff"
+           points="302,250 330,250 330,320 360,320 316,374 272,320 302,320"/>
+</svg>

@@ -1,0 +1,54 @@
+[package]
+name = "mdedit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mdedit-buffer.workspace = true
+mdedit-syntax.workspace = true
+mdedit-highlight.workspace = true
+mdedit-style.workspace = true
+mdedit-editor.workspace = true
+mdedit-workspace.workspace = true
+mdedit-export.workspace = true
+egui.workspace = true
+eframe.workspace = true
+egui_extras.workspace = true
+image.workspace = true
+rfd.workspace = true
+open.workspace = true
+log.workspace = true
+env_logger.workspace = true
+regex.workspace = true
+# Only to enable colour emoji (COLR/CBDT) rendering in egui's text stack.
+epaint = { version = "0.37", default-features = false, features = ["color_fonts"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[package.metadata.deb]
+name = "mdedit"
+maintainer = "The mdedit developers"
+copyright = "The mdedit developers"
+license-file = []
+extended-description = """\
+mdedit is a fast, native Markdown editor with live preview, syntax-highlighted \
+code blocks, tabs, a folder sidebar and outline, find/replace, sanitized HTML \
+export, and autosave with crash recovery."""
+section = "editors"
+priority = "optional"
+depends = "$auto"
+assets = [
+    ["target/release/mdedit", "usr/bin/", "755"],
+    ["../../packaging/linux/io.github.mdedit.mdedit.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/linux/io.github.mdedit.mdedit.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["../../packaging/linux/icons/io.github.mdedit.mdedit.svg", "usr/share/icons/hicolor/scalable/apps/io.github.mdedit.mdedit.svg", "644"],
+    ["../../packaging/linux/icons/io.github.mdedit.mdedit-48.png", "usr/share/icons/hicolor/48x48/apps/io.github.mdedit.mdedit.png", "644"],
+    ["../../packaging/linux/icons/io.github.mdedit.mdedit-128.png", "usr/share/icons/hicolor/128x128/apps/io.github.mdedit.mdedit.png", "644"],
+    ["../../packaging/linux/icons/io.github.mdedit.mdedit-256.png", "usr/share/icons/hicolor/256x256/apps/io.github.mdedit.mdedit.png", "644"],
+    ["../../packaging/linux/icons/io.github.mdedit.mdedit-512.png", "usr/share/icons/hicolor/512x512/apps/io.github.mdedit.mdedit.png", "644"],
+]

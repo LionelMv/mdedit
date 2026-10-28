@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=mdedit
+GenericName=Markdown Editor
+Comment=Fast native Markdown editor with live preview
+Exec=mdedit %F
+TryExec=mdedit
+Icon=io.github.mdedit.mdedit
+Terminal=false
+Categories=Utility;TextEditor;
+Keywords=markdown;md;text;editor;notes;writing;
+MimeType=text/markdown;text/x-markdown;
+StartupNotify=true
+StartupWMClass=io.github.mdedit.mdedit

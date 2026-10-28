@@ -1,0 +1,23 @@
+[package]
+name = "mdedit-editor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+egui.workspace = true
+mdedit-buffer.workspace = true
+mdedit-syntax.workspace = true
+mdedit-highlight.workspace = true
+mdedit-style.workspace = true
+log.workspace = true
+image.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+egui_kittest = { version = "0.37", features = ["wgpu"] }
+egui = { workspace = true, features = ["default_fonts"] }
