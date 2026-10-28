@@ -46,9 +46,11 @@ const SIDE_PAD: f32 = 24.0;
 /// Extra layout above/below the viewport.
 const OVERSCAN: f32 = 300.0;
 /// Vertical padding of code cards around their rows.
-const CARD_PAD_V: f32 = 6.0;
+const CARD_PAD_V: f32 = 10.0;
 /// Horizontal padding of code cards (CB-20).
-const CARD_PAD_H: f32 = 12.0;
+const CARD_PAD_H: f32 = 16.0;
+/// Corner radius of code cards.
+const CARD_RADIUS: f32 = 12.0;
 /// Max height of an inline image preview.
 const IMAGE_MAX_H: f32 = 400.0;
 /// Placeholder height for images that are loading or failed.
@@ -153,6 +155,8 @@ struct Laid {
     space_before: f32,
     space_after: f32,
     indent: f32,
+    /// Height of the code card's header row (language + copy), reserved above the code.
+    header_h: f32,
 }
 
 /// Scroll position relative to a chunk: the viewport top is `dy` below the top of the chunk
@@ -566,12 +570,16 @@ impl EditorState {
         let galley = env.ctx.fonts_mut(|f| f.layout_job(job));
         self.stats.layouts += 1;
         let fin = |v: f32| if v.is_finite() { v.clamp(0.0, 1000.0) } else { 0.0 };
+        let has_header = decorations.iter().any(|d| matches!(d, Decoration::CodeHeader { .. }));
+        let header_h = if has_header { (env.theme.code_size * 2.4).max(28.0) } else { 0.0 };
         let laid = Arc::new(Laid {
             galley,
             decorations,
-            space_before: fin(styled.space_before) + pad_v,
-            space_after: fin(styled.space_after) + pad_v,
+            space_before: fin(styled.space_before) + pad_v + header_h,
+            // Code cards with a header get a margin below, like the space above them.
+            space_after: fin(styled.space_after) + pad_v + if has_header { 8.0 } else { 0.0 },
             indent,
+            header_h,
         });
         self.cache.insert(key, CacheEntry { laid: laid.clone(), used: self.frame });
         laid
@@ -808,16 +816,19 @@ impl EditorState {
                     Decoration::Card { range, fill, stroke } => {
                         let (s, e) = chars(range);
                         if let Some((y0, y1)) = rows_y(s, e) {
-                            let rect = Rect::from_min_max(pos2(col_l, y0 - CARD_PAD_V), pos2(col_r, y1 + CARD_PAD_V));
+                            let top = y0 - CARD_PAD_V - v.g.laid.header_h;
+                            let rect = Rect::from_min_max(pos2(col_l, top), pos2(col_r, y1 + CARD_PAD_V));
                             ds.push(DecoGeom::Card { rect, fill: *fill, stroke: *stroke });
                         }
                     }
                     Decoration::CodeHeader { range, lang, code } => {
                         let (s, e) = chars(range);
                         if let Some((y0, y1)) = rows_y(s, e) {
-                            let card = Rect::from_min_max(pos2(col_l, y0 - CARD_PAD_V), pos2(col_r, y1 + CARD_PAD_V));
-                            let bh = (theme.code_size * 1.2).max(12.0);
-                            let button = Rect::from_min_size(pos2(col_r - 8.0 - 44.0, card.min.y + 4.0), vec2(44.0, bh));
+                            let hh = v.g.laid.header_h;
+                            let card = Rect::from_min_max(pos2(col_l, y0 - CARD_PAD_V - hh), pos2(col_r, y1 + CARD_PAD_V));
+                            // Copy button: a square at the right end of the header row.
+                            let side = (hh - 8.0).max(16.0);
+                            let button = Rect::from_center_size(pos2(col_r - CARD_PAD_H + 4.0 - side / 2.0, card.min.y + hh / 2.0 + 2.0), vec2(side, side));
                             let code_abs = (c.range.start + code.start).min(c.range.end)..(c.range.start + code.end).min(c.range.end);
                             ds.push(DecoGeom::Header { card, lang: lang.clone(), code: code_abs, button });
                         }
@@ -913,7 +924,7 @@ impl EditorState {
             for d in ds {
                 match d {
                     DecoGeom::Card { rect, fill, stroke } => {
-                        painter.rect(rect.translate(off), 6.0, *fill, Stroke::new(1.0, *stroke), StrokeKind::Inside);
+                        painter.rect(rect.translate(off), CARD_RADIUS, *fill, Stroke::new(1.0, *stroke), StrokeKind::Inside);
                     }
                     DecoGeom::InlineBg { rects, fill } => {
                         for r in rects {
@@ -989,8 +1000,7 @@ impl EditorState {
         }
 
         // Foreground decorations.
-        for (v, ds) in vis.iter().zip(decos) {
-            let focused = v.i >= fa && v.i <= fb;
+        for ds in decos {
             for d in ds {
                 match d {
                     DecoGeom::Checkbox { rect, checked, .. } => {
@@ -1038,25 +1048,38 @@ impl EditorState {
                         }
                     }
                     DecoGeom::Header { card, lang, code, button } => {
-                        let card_s = card.translate(off);
-                        let show = focused || hover.is_some_and(|p| card_s.contains(p));
-                        let font = egui::FontId::proportional((theme.code_size * 0.8).max(8.0));
+                        // Header row, like ChatGPT: "</> lang" on the left, copy icon on the right.
                         let b = button.translate(off);
-                        let label_x = if show { b.min.x - 8.0 } else { b.max.x };
-                        if !lang.is_empty() {
-                            painter.text(pos2(label_x, b.center().y), egui::Align2::RIGHT_CENTER, lang, font.clone(), theme.muted);
+                        let mid_y = b.center().y;
+                        let size = (theme.code_size * 0.95).max(9.0);
+                        let icon = painter.text(
+                            pos2(card.translate(off).min.x + CARD_PAD_H, mid_y),
+                            egui::Align2::LEFT_CENTER,
+                            "</>",
+                            egui::FontId::monospace(size * 0.85),
+                            theme.muted,
+                        );
+                        let label = if lang.is_empty() { "text" } else { lang.as_str() };
+                        let family = if theme.font_families { egui::FontFamily::Name(mdedit_style::BOLD_FAMILY.into()) } else { egui::FontFamily::Proportional };
+                        painter.text(pos2(icon.max.x + 8.0, mid_y), egui::Align2::LEFT_CENTER, label, egui::FontId::new(size, family), theme.text);
+                        let hot = hover.is_some_and(|p| b.contains(p));
+                        let copied = self.copied.is_some_and(|(at, t)| at == code.start && now - t < 1.5);
+                        if hot {
+                            painter.rect_filled(b, 6.0, theme.code_border);
                         }
-                        if show {
-                            let hot = hover.is_some_and(|p| b.contains(p));
-                            let copied = self.copied.is_some_and(|(at, t)| at == code.start && now - t < 1.5);
-                            if hot {
-                                painter.rect_filled(b, 4.0, theme.code_border);
-                            }
-                            painter.rect_stroke(b, 4.0, Stroke::new(1.0, theme.code_border), StrokeKind::Inside);
-                            painter.text(b.center(), egui::Align2::CENTER_CENTER, if copied { "Copied" } else { "Copy" }, font, theme.text);
-                            if copied {
-                                ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
-                            }
+                        if copied {
+                            painter.text(pos2(b.max.x, mid_y), egui::Align2::RIGHT_CENTER, "Copied", egui::FontId::proportional(size * 0.9), theme.muted);
+                            ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
+                        } else {
+                            // Two overlapping rounded squares.
+                            let col = if hot { theme.text } else { theme.muted };
+                            let stroke = Stroke::new(1.3, col);
+                            let u = b.width() * 0.22;
+                            let back = Rect::from_min_size(b.center() - vec2(u * 1.1, u * 1.1), vec2(u * 1.5, u * 1.5));
+                            let front = back.translate(vec2(u * 0.7, u * 0.7));
+                            painter.rect_stroke(back, 2.0, stroke, StrokeKind::Middle);
+                            painter.rect_filled(front, 2.0, if hot { theme.code_border } else { theme.code_bg });
+                            painter.rect_stroke(front, 2.0, stroke, StrokeKind::Middle);
                         }
                     }
                     _ => {}

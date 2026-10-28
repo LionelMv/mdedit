@@ -74,7 +74,9 @@ Some things happen as you type:
   Enter adds the closing fence for you.
 - Click a task list checkbox to tick it, or use Paragraph → Toggle Task.
 
-Code blocks are shown as cards with syntax highlighting, the language name, and a copy button.
+Code blocks are shown as cards with syntax highlighting. A header row shows `</>` and the
+language ("text" when the block has none) on the left, and a copy button on the right that
+copies just the code.
 
 ## Links and images
 
