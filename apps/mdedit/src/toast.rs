@@ -63,7 +63,7 @@ impl Toasts {
                                 ui.colored_label(ui.visuals().error_fg_color, "⚠");
                             }
                             ui.add(egui::Label::new(&t.text).wrap());
-                            if ui.small_button("✕").clicked() {
+                            if ui.add(egui::Button::new("✕").small().frame(false)).clicked() {
                                 dismiss = Some(i);
                             }
                         });

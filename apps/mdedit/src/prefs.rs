@@ -68,9 +68,8 @@ pub fn preferences_window(ctx: &egui::Context, open: &mut bool, cfg: &mut Config
         ui.separator();
         ui.horizontal(|ui| {
             if ui.button("Reset to defaults").clicked() {
-                let keep_folder = cfg.last_folder.clone();
                 let keep_sidebar = cfg.show_sidebar;
-                *cfg = Config { last_folder: keep_folder, show_sidebar: keep_sidebar, ..Config::default() };
+                *cfg = Config { show_sidebar: keep_sidebar, ..Config::default() };
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Close").clicked() {

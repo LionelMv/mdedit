@@ -10,7 +10,6 @@ use mdedit_editor::Command;
 pub enum Action {
     New,
     Open,
-    OpenFolder,
     OpenRecent(PathBuf),
     ClearRecent,
     Save,
@@ -61,7 +60,6 @@ pub fn shortcuts() -> Vec<(KeyboardShortcut, Action)> {
     vec![
         (s(CMD_SHIFT, Key::Tab), A::PrevTab),
         (s(CMD_SHIFT, Key::S), A::SaveAs),
-        (s(CMD_SHIFT, Key::O), A::OpenFolder),
         (s(CMD_SHIFT, Key::B), A::ToggleSidebar),
         (s(CMD_SHIFT, Key::I), A::Format(C::Image)),
         (s(CMD_SHIFT, Key::Q), A::Format(C::BlockQuote)),
@@ -178,7 +176,6 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>, out: &mut Vec<Action>) {
         ui.menu_button("File", |ui| {
             item(ui, "New", A::New, out);
             item(ui, "Open…", A::Open, out);
-            item(ui, "Open Folder…", A::OpenFolder, out);
             ui.menu_button("Open Recent", |ui| {
                 if st.recent.is_empty() {
                     ui.weak("No recent files");

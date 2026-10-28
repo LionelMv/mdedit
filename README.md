@@ -8,9 +8,11 @@ file are saved byte for byte.
 
 ```bash
 ./scripts/install.sh            # cargo build --release + install into ~/.local
-mdedit [FILE|FOLDER]...         # or launch "mdedit" from the app menu
+mdedit [FILE]...                # or launch "mdedit" from the app menu
 ./scripts/uninstall.sh          # remove (keeps your settings)
 ```
+
+How to use it: [docs/user-guide.md](docs/user-guide.md).
 
 Settings: `~/.config/mdedit/config.toml`. Crash-recovery snapshots: `~/.local/state/mdedit/`.
 Set `MDEDIT_HOME=/some/dir` to keep everything in one folder (used by tests).

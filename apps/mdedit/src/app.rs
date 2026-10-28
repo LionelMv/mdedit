@@ -11,28 +11,25 @@ use mdedit_highlight::{HlTheme, Highlighter};
 use mdedit_style::Mode;
 use mdedit_syntax::Heading;
 use mdedit_workspace::recovery::{self, Snapshot};
-use mdedit_workspace::{Config, RecentFiles, SearchHit, TreeEntry, Watcher};
+use mdedit_workspace::{Config, RecentFiles, Watcher};
 
 use crate::cli::StartupTargets;
 use crate::dialogs::{self, RecoveryChoice, SaveChoice, TableDialog};
 use crate::find::FindBar;
 use crate::links::{self, LinkAction};
 use crate::menu::{self, Action, MenuState};
-use crate::sidebar::{Sidebar, SidebarAction};
+use crate::sidebar::Sidebar;
 use crate::tabs::{self, LARGE_FILE_BYTES, Tab};
 use crate::theme::ThemeState;
 use crate::toast::Toasts;
 
-/// Results from background threads (file dialogs, scans, searches, parses).
+/// Results from background threads (file dialogs, parses).
 pub enum BgMsg {
     OpenFiles(Vec<PathBuf>),
-    OpenFolder(PathBuf),
     SaveAs { tab_id: u64, path: PathBuf, then_close: bool },
     SaveAsCancelled { then_close: bool },
     ExportDone(Result<PathBuf, String>),
     DialogClosed,
-    Tree { generation: u64, tree: TreeEntry },
-    Search { generation: u64, hits: Vec<SearchHit> },
     Outline { tab_id: u64, version: u64, headings: Vec<Heading> },
     RecoveryError(String),
 }
@@ -134,7 +131,7 @@ impl MdApp {
 
         for f in &targets.files {
             if f.exists() {
-                app.open_path(f, ctx);
+                app.open_path(f);
             } else {
                 // New document that will be saved at this path.
                 let mut doc = Document::new();
@@ -146,14 +143,6 @@ impl MdApp {
         if app.tabs.is_empty() {
             app.new_tab();
         }
-        let folder = targets.folder.clone().or_else(|| app.config.last_folder.clone().filter(|p| p.is_dir()));
-        if let Some(folder) = folder {
-            if targets.folder.is_some() {
-                app.show_sidebar = true;
-            }
-            app.set_folder(folder, ctx);
-        }
-
         app.recovery_offer = recovery::list().into_iter().filter(|s| !tabs::snapshot_owned_by_live_process(&s.id)).collect();
         app
     }
@@ -188,12 +177,11 @@ impl MdApp {
         self.tabs.iter().position(|t| t.doc.path.as_deref().is_some_and(|p| same_file(p, path)))
     }
 
-    /// Open a file (or switch to its tab). Directories open in the sidebar.
-    fn open_path(&mut self, path: &Path, ctx: &egui::Context) -> Option<usize> {
+    /// Open a file (or switch to its tab).
+    fn open_path(&mut self, path: &Path) -> Option<usize> {
         let path = crate::cli::absolutize(path);
         if path.is_dir() {
-            self.set_folder(path, ctx);
-            self.show_sidebar = true;
+            self.toasts.error(format!("Can't open {}: it is a folder", path.display()));
             return None;
         }
         if let Some(idx) = self.find_tab_by_path(&path) {
@@ -236,17 +224,6 @@ impl MdApp {
         self.recent.add(&path);
         self.activate(idx);
         Some(idx)
-    }
-
-    fn set_folder(&mut self, folder: PathBuf, ctx: &egui::Context) {
-        if let Some(w) = self.watcher.as_mut() {
-            if let Some(old) = &self.sidebar.folder {
-                w.unwatch(old);
-            }
-            w.watch(&folder);
-        }
-        self.config.last_folder = Some(folder.clone());
-        self.sidebar.set_folder(folder, &self.tx, ctx);
     }
 
     /// Close without asking.
@@ -320,7 +297,6 @@ impl MdApp {
 
     fn sync_config(&mut self) {
         self.config.show_sidebar = self.show_sidebar;
-        self.config.last_folder = self.sidebar.folder.clone();
     }
 
     fn save_config_if_changed(&mut self) {
@@ -386,7 +362,7 @@ impl MdApp {
         }
         self.dialog_busy = true;
         let doc = &self.tabs[idx].doc;
-        let dir = doc.path.as_deref().and_then(Path::parent).map(Path::to_path_buf).or_else(|| self.sidebar.folder.clone());
+        let dir = doc.path.as_deref().and_then(Path::parent).map(Path::to_path_buf);
         let name = doc.path.as_deref().and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| suggested_name(&doc.buffer.slice(0..doc.buffer.len_bytes().min(400))));
         let tx = self.tx.clone();
         let ctx = self.ctx_for_threads();
@@ -410,12 +386,12 @@ impl MdApp {
 
     // ---------------------------------------------------------------- dialogs
 
-    fn start_open_dialog(&mut self, folder: bool) {
+    fn start_open_dialog(&mut self) {
         if self.dialog_busy {
             return;
         }
         self.dialog_busy = true;
-        let dir = self.tabs.get(self.active).and_then(|t| t.base_dir().map(Path::to_path_buf)).or_else(|| self.sidebar.folder.clone());
+        let dir = self.tabs.get(self.active).and_then(|t| t.base_dir().map(Path::to_path_buf));
         let tx = self.tx.clone();
         let ctx = self.ctx_for_threads();
         std::thread::spawn(move || {
@@ -423,11 +399,7 @@ impl MdApp {
             if let Some(dir) = dir {
                 d = d.set_directory(dir);
             }
-            let msg = if folder {
-                d.set_title("Open Folder").pick_folder().map(BgMsg::OpenFolder)
-            } else {
-                d.set_title("Open").add_filter("Markdown", &["md", "markdown", "mdown", "mkd", "txt"]).add_filter("All files", &["*"]).pick_files().map(BgMsg::OpenFiles)
-            };
+            let msg = d.set_title("Open").add_filter("Markdown", &["md", "markdown", "mdown", "mkd", "txt"]).add_filter("All files", &["*"]).pick_files().map(BgMsg::OpenFiles);
             let _ = tx.send(msg.unwrap_or(BgMsg::DialogClosed));
             ctx.request_repaint();
         });
@@ -472,13 +444,8 @@ impl MdApp {
                 BgMsg::OpenFiles(paths) => {
                     self.dialog_busy = false;
                     for p in paths {
-                        self.open_path(&p, ctx);
+                        self.open_path(&p);
                     }
-                }
-                BgMsg::OpenFolder(p) => {
-                    self.dialog_busy = false;
-                    self.set_folder(p, ctx);
-                    self.show_sidebar = true;
                 }
                 BgMsg::SaveAs { tab_id, path, then_close } => {
                     self.dialog_busy = false;
@@ -508,8 +475,6 @@ impl MdApp {
                     }
                 }
                 BgMsg::DialogClosed => self.dialog_busy = false,
-                BgMsg::Tree { generation, tree } => self.sidebar.tree_done(generation, tree),
-                BgMsg::Search { generation, hits } => self.sidebar.search_done(generation, hits),
                 BgMsg::Outline { tab_id, version, headings } => self.sidebar.outline_done(tab_id, version, headings),
                 BgMsg::RecoveryError(e) => self.toasts.error(format!("Can't write recovery snapshot: {e}")),
             }
@@ -524,21 +489,11 @@ impl MdApp {
         if changed.is_empty() {
             return;
         }
-        let mut rescan = false;
         for path in changed {
             let open: Vec<usize> = (0..self.tabs.len()).filter(|&i| self.tabs[i].doc.path.as_deref().is_some_and(|p| p == path || same_file(p, &path))).collect();
-            if open.is_empty() {
-                if self.sidebar.folder.as_deref().is_some_and(|f| path.starts_with(f)) {
-                    rescan = true;
-                }
-                continue;
-            }
             for idx in open {
                 self.check_disk_change(idx);
             }
-        }
-        if rescan {
-            self.sidebar.schedule_rescan();
         }
     }
 
@@ -645,7 +600,7 @@ impl MdApp {
 
     // ---------------------------------------------------------------- links
 
-    fn handle_link(&mut self, url: &str, ctx: &egui::Context) {
+    fn handle_link(&mut self, url: &str) {
         let base = self.tabs.get(self.active).and_then(|t| t.base_dir().map(Path::to_path_buf));
         match links::classify(url, base.as_deref()) {
             LinkAction::External(u) => {
@@ -656,7 +611,7 @@ impl MdApp {
                 });
             }
             LinkAction::OpenDoc(p) => {
-                self.open_path(&p, ctx);
+                self.open_path(&p);
             }
             LinkAction::Anchor(slug) => {
                 let Some(tab) = self.tabs.get_mut(self.active) else { return };
@@ -678,11 +633,10 @@ impl MdApp {
         use Action as A;
         match action {
             A::New => self.new_tab(),
-            A::Open => self.start_open_dialog(false),
-            A::OpenFolder => self.start_open_dialog(true),
+            A::Open => self.start_open_dialog(),
             A::OpenRecent(p) => {
                 if p.exists() {
-                    self.open_path(&p, ctx);
+                    self.open_path(&p);
                 } else {
                     self.recent.remove(&p);
                     let _ = self.recent.save();
@@ -831,7 +785,7 @@ impl MdApp {
                             if r.middle_clicked() {
                                 close = Some(t.id);
                             }
-                            if ui.small_button("✕").on_hover_text("Close (Ctrl+W)").clicked() {
+                            if ui.add(egui::Button::new("✕").small().frame(false)).on_hover_text("Close (Ctrl+W)").clicked() {
                                 close = Some(t.id);
                             }
                         });
@@ -850,13 +804,16 @@ impl MdApp {
         }
     }
 
-    fn status_bar(&self, ui: &mut egui::Ui, zoom: f32) {
+    fn status_bar(&mut self, ui: &mut egui::Ui, zoom: f32) {
         let Some(t) = self.tabs.get(self.active) else { return };
         ui.horizontal(|ui| {
             let s = &t.status;
             ui.label(format!("{} words · {} chars", s.words, s.chars));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(format!("{:.0}%", zoom * 100.0));
+                let zoom_btn = ui.add(egui::Button::new(format!("{:.0}%", zoom * 100.0)).frame(false));
+                if zoom_btn.on_hover_text("Zoom: Ctrl++ / Ctrl+-. Click to reset to 100%").clicked() {
+                    self.actions.push(Action::ZoomReset);
+                }
                 ui.separator();
                 ui.label(if t.doc.bom { "UTF-8 BOM" } else { "UTF-8" });
                 ui.separator();
@@ -865,10 +822,13 @@ impl MdApp {
                     LineEnding::CrLf => "CRLF",
                 });
                 ui.separator();
-                ui.label(match t.editor.mode {
-                    Mode::LivePreview => "Live",
-                    Mode::Source => "Source",
-                });
+                let (mode, hint) = match t.editor.mode {
+                    Mode::LivePreview => ("Live", "Live preview. Click to show Markdown source (Ctrl+E)"),
+                    Mode::Source => ("Source", "Markdown source. Click to show live preview (Ctrl+E)"),
+                };
+                if ui.add(egui::Button::new(mode).frame(false)).on_hover_text(hint).clicked() {
+                    self.actions.push(Action::ToggleSource);
+                }
                 ui.separator();
                 ui.label(format!("Ln {}, Col {}", s.line.max(1), s.column.max(1)));
             });
@@ -905,7 +865,7 @@ impl MdApp {
         if let Some(size) = tab.large_file {
             banner(ui, |ui| {
                 ui.label(format!("Large file ({:.1} MB): opened in Source mode for speed. Ctrl+E switches to live preview.", size as f64 / 1_048_576.0));
-                if ui.small_button("✕").clicked() {
+                if ui.add(egui::Button::new("✕").small().frame(false)).clicked() {
                     tab.large_file = None;
                 }
             });
@@ -955,7 +915,7 @@ impl eframe::App for MdApp {
         // Drag and drop.
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         for p in dropped {
-            self.open_path(&p, &ctx);
+            self.open_path(&p);
         }
 
         self.poll_watcher();
@@ -996,34 +956,28 @@ impl eframe::App for MdApp {
 
         let mut wake: Vec<Option<Duration>> = Vec::new();
         if self.show_sidebar {
-            let mut side_action = None;
+            let mut heading = None;
             egui::Panel::left("sidebar").resizable(true).default_size(240.0).size_range(160.0..=600.0).show(ui, |ui| {
-                let (a, w) = self.sidebar.ui(ui, self.tabs.get(self.active), &self.tx);
-                side_action = a;
+                let (h, w) = self.sidebar.ui(ui, self.tabs.get(self.active), &self.tx, &mut self.show_sidebar);
+                heading = h;
                 wake.push(w);
             });
-            match side_action {
-                Some(SidebarAction::OpenFile(p)) => {
-                    self.open_path(&p, &ctx);
-                }
-                Some(SidebarAction::OpenAtLine(p, line)) => {
-                    if let Some(idx) = self.open_path(&p, &ctx) {
-                        let tab = &mut self.tabs[idx];
-                        let at = tab.doc.buffer.line_start(line);
-                        tab.editor.scroll_to(&mut tab.doc, at);
-                    }
-                }
-                Some(SidebarAction::ScrollTo(at)) => {
-                    if let Some(tab) = self.tabs.get_mut(self.active) {
-                        tab.editor.scroll_to(&mut tab.doc, at);
-                        tab.editor.request_focus = true;
-                    }
-                }
-                Some(SidebarAction::OpenFolder) => self.actions.push(Action::OpenFolder),
-                None => {}
+            if let Some(at) = heading
+                && let Some(tab) = self.tabs.get_mut(self.active)
+            {
+                tab.editor.scroll_to(&mut tab.doc, at);
+                tab.editor.request_focus = true;
             }
+        } else {
+            // Collapsed: a thin strip with a button that brings the outline back.
+            egui::Panel::left("sidebar_collapsed").resizable(false).exact_size(28.0).show(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    if ui.small_button("»").on_hover_text("Show outline (Ctrl+Shift+B)").clicked() {
+                        self.show_sidebar = true;
+                    }
+                });
+            });
         }
-        wake.push(self.sidebar.tick(&self.tx, &ctx));
 
         // Central area: banners, find bar, editor.
         let remote_images = self.config.remote_images;
@@ -1050,7 +1004,7 @@ impl eframe::App for MdApp {
             }
         });
         if let Some(url) = link {
-            self.handle_link(&url, &ctx);
+            self.handle_link(&url);
         }
 
         // Modals and windows.
@@ -1133,7 +1087,7 @@ impl eframe::App for MdApp {
         }
 
         // Idle: wake only for timers / watcher polling.
-        if self.watcher.is_some() && (self.sidebar.folder.is_some() || self.tabs.iter().any(|t| t.doc.path.is_some())) {
+        if self.watcher.is_some() && self.tabs.iter().any(|t| t.doc.path.is_some()) {
             wake.push(Some(WATCH_POLL));
         }
         if let Some(d) = wake.into_iter().flatten().min() {

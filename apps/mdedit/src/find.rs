@@ -225,7 +225,7 @@ impl FindBar {
                 self.replace_mode = true;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("✕").on_hover_text("Close (Esc)").clicked() {
+                if ui.add(egui::Button::new("✕").frame(false)).on_hover_text("Close (Esc)").clicked() {
                     close = true;
                 }
             });

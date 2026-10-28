@@ -1,4 +1,4 @@
-//! Command-line parsing: `mdedit [OPTIONS] [FILE|DIR]...`.
+//! Command-line parsing: `mdedit [OPTIONS] [FILE]...`.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -9,12 +9,11 @@ pub const HELP: &str = "\
 mdedit - a native Markdown editor
 
 USAGE:
-    mdedit [OPTIONS] [FILE|DIR]...
+    mdedit [OPTIONS] [FILE]...
 
 ARGS:
     FILE    Markdown file to open in a tab. A path that does not exist yet opens
             an empty document that will be saved there.
-    DIR     Folder to show in the sidebar file tree.
 
 OPTIONS:
     -h, --help       Print this help and exit
@@ -100,22 +99,11 @@ pub fn percent_decode(s: &str) -> Option<String> {
 pub struct StartupTargets {
     /// Files to open in tabs (may not exist yet).
     pub files: Vec<PathBuf>,
-    /// The folder for the sidebar (last one given wins).
-    pub folder: Option<PathBuf>,
 }
 
-/// Split CLI paths into files and folders by looking at the file system.
+/// Make the CLI paths absolute.
 pub fn classify(paths: &[PathBuf]) -> StartupTargets {
-    let mut t = StartupTargets::default();
-    for p in paths {
-        let p = absolutize(p);
-        if p.is_dir() {
-            t.folder = Some(p);
-        } else {
-            t.files.push(p);
-        }
-    }
-    t
+    StartupTargets { files: paths.iter().map(|p| absolutize(p)).collect() }
 }
 
 /// Make `p` absolute against the current dir (without resolving symlinks or requiring it to exist).
@@ -173,14 +161,4 @@ mod tests {
         assert_eq!(percent_decode("%ff"), None); // invalid UTF-8
     }
 
-    #[test]
-    fn classify_dirs_and_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let f = dir.path().join("a.md");
-        std::fs::write(&f, "# a").unwrap();
-        let missing = dir.path().join("new.md");
-        let t = classify(&[f.clone(), dir.path().to_path_buf(), missing.clone()]);
-        assert_eq!(t.files, vec![f, missing]);
-        assert_eq!(t.folder.as_deref(), Some(dir.path()));
-    }
 }

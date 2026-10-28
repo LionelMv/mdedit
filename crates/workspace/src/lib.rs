@@ -1,5 +1,5 @@
-//! App-level persistence and files: config, recent files, crash recovery, folder tree,
-//! folder search, file watching. No egui.
+//! App-level persistence and files: config, recent files, crash recovery, file watching.
+//! No egui.
 //!
 //! Paths follow XDG via `directories` (`~/.config/mdedit`, `~/.local/state/mdedit`).
 //! Files this crate writes that may hold document text are created with mode 0600.
@@ -22,10 +22,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub mod recovery;
-mod tree;
 mod watch;
 
-pub use tree::{MAX_DEPTH, MAX_ENTRIES, MAX_HITS, MAX_SEARCH_FILE_SIZE, is_markdown_path, scan_tree, search_folder};
 pub use watch::Watcher;
 
 /// Environment variable that, if set, replaces all base directories (see crate docs).
@@ -116,7 +114,6 @@ pub struct Config {
     /// Load `http(s)` images in the editor (privacy: off by default).
     pub remote_images: bool,
     pub show_sidebar: bool,
-    pub last_folder: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -132,7 +129,6 @@ impl Default for Config {
             image_folder: "assets".into(),
             remote_images: false,
             show_sidebar: true,
-            last_folder: None,
         }
     }
 }
@@ -248,24 +244,6 @@ fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()))
 }
 
-/// One entry of the folder sidebar. STABLE.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TreeEntry {
-    pub path: PathBuf,
-    pub name: String,
-    pub is_dir: bool,
-    pub children: Vec<TreeEntry>,
-}
-
-/// Folder search hit. STABLE.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SearchHit {
-    pub path: PathBuf,
-    /// 0-based line number (same convention as `mdedit_buffer::Buffer`).
-    pub line: usize,
-    /// The line's text, trimmed and truncated to ~200 chars.
-    pub text: String,
-}
 
 #[cfg(test)]
 mod tests {
@@ -276,7 +254,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("sub/config.toml");
         assert_eq!(Config::load_from(&p), Config::default());
-        let c = Config { theme: "dark".into(), body_size: 18.5, last_folder: Some("/tmp/x".into()), ..Config::default() };
+        let c = Config { theme: "dark".into(), body_size: 18.5, ..Config::default() };
         c.save_to(&p).unwrap();
         assert_eq!(Config::load_from(&p), c);
         // Partial file: missing fields take defaults.
