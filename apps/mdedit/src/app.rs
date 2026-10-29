@@ -151,10 +151,17 @@ impl MdApp {
 
     fn push_tab(&mut self, doc: Document) -> usize {
         let mode = if self.config.source_mode { Mode::Source } else { Mode::LivePreview };
-        let id = self.next_tab_id;
-        self.next_tab_id += 1;
+        let id = self.new_tab_id();
         self.tabs.push(Tab::new(id, doc, mode));
         self.tabs.len() - 1
+    }
+
+    /// A fresh tab id. A document replacing a tab gets a new one too: per-tab caches (the
+    /// outline) are keyed on (tab id, buffer version), and every new buffer starts at version 0.
+    fn new_tab_id(&mut self) -> u64 {
+        let id = self.next_tab_id;
+        self.next_tab_id += 1;
+        id
     }
 
     fn new_tab(&mut self) {
@@ -203,7 +210,7 @@ impl MdApp {
         let reuse = self.tabs.get(self.active).is_some_and(Tab::is_pristine);
         let idx = if reuse {
             let mode = if self.config.source_mode { Mode::Source } else { Mode::LivePreview };
-            let id = self.tabs[self.active].id;
+            let id = self.new_tab_id();
             let recovery_id = self.tabs[self.active].recovery_id.clone();
             let mut t = Tab::new(id, doc, mode);
             t.recovery_id = recovery_id;
@@ -572,7 +579,7 @@ impl MdApp {
                     let disk_hash = s.path.as_deref().filter(|p| p.is_file()).map(|_| tabs::hash_text(&doc.buffer.text()));
                     let i = if self.tabs.get(self.active).is_some_and(Tab::is_pristine) {
                         let _ = recovery::remove(&self.tabs[self.active].recovery_id);
-                        let id = self.tabs[self.active].id;
+                        let id = self.new_tab_id();
                         let mode = self.tabs[self.active].editor.mode;
                         self.tabs[self.active] = Tab::new(id, doc, mode);
                         self.active

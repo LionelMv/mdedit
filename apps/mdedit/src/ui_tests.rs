@@ -51,3 +51,34 @@ fn theme_switch_keeps_text_readable() {
     let differing = first.pixels().zip(last.pixels()).filter(|(a, b)| a.0.iter().zip(b.0).any(|(x, y)| x.abs_diff(y) > 25)).count();
     assert!(differing < 2000, "{differing} pixels differ between the first and final dark views");
 }
+
+/// Opening a file into the empty startup tab must show that file's outline (the replaced tab
+/// used to keep its id, so the outline cache thought it was up to date).
+#[test]
+#[ignore]
+fn outline_shows_for_file_opened_into_empty_tab() {
+    assert!(std::env::var_os(mdedit_workspace::HOME_ENV).is_some(), "set MDEDIT_HOME to a scratch dir");
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("doc.md");
+    std::fs::write(&file, "# First heading\n\ntext\n\n## Second heading\n").unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| MdApp::new(cc, StartupTargets::default()));
+    h.run_steps(3);
+    h.input_mut().dropped_files.push(std::sync::Arc::new(Dropped(file)));
+    h.run_steps(3);
+    h.get_by_label("doc.md");
+    h.get_by_label("First heading");
+    h.get_by_label("Second heading");
+}
+
+/// A file dropped on the window (dropping goes through the same open path as File → Open).
+#[derive(Debug)]
+struct Dropped(std::path::PathBuf);
+
+impl egui::DroppedFile for Dropped {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
+}
