@@ -95,8 +95,10 @@ pub struct EditorState {
     counts_dirty: bool,
     image_guard: std::cell::RefCell<images::ImageGuard>,
     stats: FrameStats,
-    /// Font atlas fill ratio after the last `show`; a drop means egui wiped the atlas.
+    /// Font atlas fill ratio and text options after the last `show`: a lower ratio or other
+    /// options mean egui rebuilt the atlas.
     atlas_fill: f32,
+    text_options: Option<egui::epaint::text::TextOptions>,
 }
 
 /// Debug counters for the last frame (tests, profiling). Added API.
@@ -278,6 +280,7 @@ impl EditorState {
             image_guard: Default::default(),
             stats: FrameStats::default(),
             atlas_fill: 0.0,
+            text_options: None,
         }
     }
 
@@ -294,9 +297,11 @@ impl EditorState {
         let start_version = doc.buffer.version();
         let mut out = EditorOutput::default();
 
-        // egui wipes the font atlas when it gets full; cached galleys then point at the wrong
-        // glyphs and draw as gibberish, so drop them.
-        if ui.ctx().fonts(|f| f.font_atlas_fill_ratio()) < self.atlas_fill {
+        // egui rebuilds the font atlas when it gets full, and when its text options change
+        // (dark and light mode use different ones). Cached galleys then point at the wrong
+        // glyphs and draw as gibberish or nothing, so drop them.
+        let (fill, opts) = ui.ctx().fonts(|f| (f.font_atlas_fill_ratio(), *f.options()));
+        if fill < self.atlas_fill || self.text_options.is_some_and(|o| o != opts) {
             self.cache.clear();
         }
         if self.last_theme.as_ref() != Some(theme) {
@@ -376,7 +381,7 @@ impl EditorState {
         out.chars = self.model.counts.1;
         out.changed = out.changed || doc.buffer.version() != start_version;
         self.stats.chunks = self.model.chunks.len();
-        self.atlas_fill = ui.ctx().fonts(|f| f.font_atlas_fill_ratio());
+        (self.atlas_fill, self.text_options) = ui.ctx().fonts(|f| (f.font_atlas_fill_ratio(), Some(*f.options())));
         out
     }
 
