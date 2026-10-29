@@ -42,3 +42,16 @@ buttons still show one: **«** (hide outline), **»** (show outline) and **+** (
 
 **To do.** Decide whether these should match the ✕ buttons. If so, draw them with
 `egui::Button::new(…).small().frame(false)` like the close buttons in `apps/mdedit/src/app.rs`.
+
+## 4. Change name of the Editor (caps?)
+
+## 5. Long table cells don't wrap
+
+**Problem.** In live preview, table columns are lined up by adding space before each cell
+(`align_table` in `crates/editor/src/lib.rs`), and table rows never wrap: a wrapped row would
+break out of the grid. A table wider than the text column (for example one with a long
+sentence in a cell) runs past the right edge and is cut off by the window.
+
+**To do.** Lay each cell out on its own (one galley per cell, wrapped to a column width that
+fits the window), with caret movement and hit-testing mapped back to the source text. Simpler
+stopgap: let wide tables scroll horizontally.

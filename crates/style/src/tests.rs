@@ -406,7 +406,7 @@ fn thematic_break_and_table() {
     assert!(s.decorations.contains(&Decoration::Rule { range: 0..3, color: t.rule }));
     assert_eq!(text_where(&s, |f| f.color == Color32::TRANSPARENT), "---");
     let s = style(text, &blocks, &cs[1], Mode::LivePreview, false, &t);
-    assert!(s.decorations.contains(&Decoration::TableGrid { rows: vec![vec![2..3, 6..7], vec![22..23, 26..27]], color: t.table_border }));
+    assert!(s.decorations.contains(&Decoration::TableGrid { rows: vec![vec![2..3, 6..7], vec![22..23, 26..27]], aligns: vec![mdedit_syntax::Align::None; 2], color: t.table_border }));
     assert_eq!(text_where(&s, |f| f.color == t.heading), " a  b ");
     // Unfocused: delimiter row collapsed, pipes transparent at full size.
     assert_eq!(text_where(&s, hidden), "|---|:-:|\n");

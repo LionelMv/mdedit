@@ -621,3 +621,22 @@ fn font_atlas_reset_relays_cached_text() {
     h.frame(vec![]);
     assert!(h.ed.frame_stats().layouts > 0, "cached galleys must be re-laid after an atlas reset");
 }
+
+#[test]
+fn table_cells_line_up_in_columns() {
+    let text = "intro\n\n| Item | Value |\n| --- | ---: |\n| New sudo user | 1 |\n| App | 12345 |\n\nend\n";
+    let mut h = H::new(text);
+    h.set_caret(0);
+    h.frame(vec![]);
+    let at = |s: &str| text.find(s).unwrap();
+    let x = |h: &mut H, s: &str| h.pos_of(at(s)).x;
+    // Left-aligned first column: every cell starts at the same x.
+    let (a, b) = (x(&mut h, "Item"), x(&mut h, "New sudo"));
+    assert!((a - b).abs() < 1.0, "first column: {a} vs {b}");
+    // Right-aligned second column: cells end at the same x, after the widest first cell.
+    let end = |h: &mut H, s: &str| h.pos_of(at(s) + s.len()).x;
+    let e2 = h.pos_of(at("| 1 |") + 3).x; // just after "1"
+    let (e1, e3) = (end(&mut h, "Value"), end(&mut h, "12345"));
+    assert!((e1 - e3).abs() < 1.0 && (e2 - e3).abs() < 1.0, "right column ends: {e1} {e2} {e3}");
+    assert!(x(&mut h, "Value") > end(&mut h, "New sudo user"), "columns don't overlap");
+}

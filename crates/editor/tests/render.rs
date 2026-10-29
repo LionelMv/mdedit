@@ -36,4 +36,6 @@ fn render_screenshots() {
     shot("light_caret_top.png", 2, false);
     shot("light_caret_code.png", SAMPLE.find("println").unwrap_or(0), false);
     shot("dark_caret_list.png", SAMPLE.find("open task").unwrap_or(0), true);
+    shot("dark_caret_table.png", SAMPLE.find("1 | two").unwrap_or(0), true);
+    shot("dark_table.png", 2, true);
 }

@@ -572,8 +572,21 @@ impl EditorState {
         if job.wrap.max_width.is_finite() && job.wrap.max_width > max_wrap {
             job.wrap.max_width = max_wrap;
         }
-        let galley = env.ctx.fonts_mut(|f| f.layout_job(job));
+        let table = decorations.iter().find_map(|d| match d {
+            Decoration::TableGrid { rows, aligns, .. } => Some((rows.clone(), aligns.clone())),
+            _ => None,
+        });
+        if table.is_some() {
+            // A wrapped row would break out of the grid.
+            job.wrap.max_width = f32::INFINITY;
+        }
+        let mut galley = env.ctx.fonts_mut(|f| f.layout_job(job.clone()));
         self.stats.layouts += 1;
+        if let Some((rows, aligns)) = table
+            && let Some(aligned) = align_table(&galley, &job, &rows, &aligns)
+        {
+            galley = env.ctx.fonts_mut(|f| f.layout_job(aligned));
+        }
         let fin = |v: f32| if v.is_finite() { v.clamp(0.0, 1000.0) } else { 0.0 };
         let has_header = decorations.iter().any(|d| matches!(d, Decoration::CodeHeader { .. }));
         let header_h = if has_header { (env.theme.code_size * 2.4).max(28.0) } else { 0.0 };
@@ -886,7 +899,7 @@ impl EditorState {
                         }
                     }
                     Decoration::Image { .. } => {}
-                    Decoration::TableGrid { rows, color } => {
+                    Decoration::TableGrid { rows, color, .. } => {
                         ds.push(DecoGeom::Lines { lines: table_lines(galley, rows, &chars, &to_c), color: *color });
                     }
                     Decoration::Link { range, url } => {
@@ -1687,9 +1700,17 @@ fn table_lines(
     if row_rects.is_empty() {
         return lines;
     }
-    let pad = 6.0;
+    let pad = CELL_GAP / 2.0;
     let x0 = row_rects.iter().flatten().map(|r| r.min.x).fold(f32::INFINITY, f32::min) - pad;
     let x1 = row_rects.iter().flatten().map(|r| r.max.x).fold(f32::NEG_INFINITY, f32::max) + pad;
+    // Column borders: halfway between the widest cell of a column and the next column.
+    let ncols = row_rects.iter().map(Vec::len).max().unwrap_or(0);
+    let col = |j: usize, f: fn(&Rect) -> f32, fold: fn(f32, f32) -> f32, init: f32| {
+        row_rects.iter().filter_map(|rr| rr.get(j)).map(f).fold(init, fold)
+    };
+    let borders: Vec<f32> = (1..ncols)
+        .map(|j| (col(j - 1, |r| r.max.x, f32::max, f32::NEG_INFINITY) + col(j, |r| r.min.x, f32::min, f32::INFINITY)) / 2.0)
+        .collect();
     for (k, rr) in row_rects.iter().enumerate() {
         let y0 = rr.iter().map(|r| r.min.y).fold(f32::INFINITY, f32::min) - 2.0;
         let y1 = rr.iter().map(|r| r.max.y).fold(f32::NEG_INFINITY, f32::max) + 2.0;
@@ -1699,12 +1720,80 @@ fn table_lines(
         lines.push([pos2(x0, y1), pos2(x1, y1)]);
         lines.push([pos2(x0, y0), pos2(x0, y1)]);
         lines.push([pos2(x1, y0), pos2(x1, y1)]);
-        for w in rr.windows(2) {
-            let x = (w[0].max.x + w[1].min.x) / 2.0;
+        for &x in borders.iter().take(rr.len().saturating_sub(1)) {
             lines.push([pos2(x, y0), pos2(x, y1)]);
         }
     }
     lines
+}
+
+/// Space between table columns (cell padding on both sides of a border).
+const CELL_GAP: f32 = 28.0;
+
+/// Line a live-preview table up in columns: add space before each cell (the section's
+/// `leading_space`; the text itself is unchanged) so every cell of a column starts at the same
+/// x, honouring the column's alignment. `None` when nothing needs to move.
+fn align_table(galley: &Galley, job: &LayoutJob, rows: &[Vec<Range<usize>>], aligns: &[mdedit_syntax::Align]) -> Option<LayoutJob> {
+    let text = &job.text;
+    let valid = |r: &Range<usize>| r.start <= r.end && r.end <= text.len() && text.is_char_boundary(r.start) && text.is_char_boundary(r.end);
+    let x = |b: usize| geom::caret_rect(galley, text[..b].chars().count()).0.min.x;
+    let ncols = rows.iter().map(Vec::len).max()?;
+    let mut shift = vec![0.0f32; rows.len()];
+    let mut inserts: Vec<(usize, f32)> = Vec::new();
+    let mut prev_end: Option<f32> = None;
+    for j in 0..ncols {
+        // (byte, start x after earlier shifts, width) of cell j in each row.
+        let cells: Vec<Option<(usize, f32, f32)>> = rows
+            .iter()
+            .zip(&shift)
+            .map(|(cells, sh)| {
+                cells.get(j).filter(|c| valid(c)).map(|c| {
+                    let x0 = x(c.start);
+                    (c.start, x0 + sh, x(c.end) - x0)
+                })
+            })
+            .collect();
+        let width = cells.iter().flatten().map(|c| c.2).fold(0.0, f32::max);
+        let mut col_x = cells.iter().flatten().map(|c| c.1).fold(f32::NEG_INFINITY, f32::max);
+        if let Some(end) = prev_end {
+            col_x = col_x.max(end + CELL_GAP);
+        }
+        if !col_x.is_finite() {
+            continue;
+        }
+        let f = match aligns.get(j) {
+            Some(mdedit_syntax::Align::Right) => 1.0,
+            Some(mdedit_syntax::Align::Center) => 0.5,
+            _ => 0.0,
+        };
+        for (r, cell) in cells.iter().enumerate() {
+            let Some((b, start, w)) = *cell else { continue };
+            let d = col_x - start + (width - w) * f;
+            if d > 0.25 {
+                inserts.push((b, d));
+                shift[r] += d;
+            }
+        }
+        prev_end = Some(col_x + width);
+    }
+    if inserts.is_empty() {
+        return None;
+    }
+    let mut job = job.clone();
+    for (at, space) in inserts {
+        let at = egui::text::ByteIndex(at);
+        let Some(i) = job.sections.iter().position(|s| s.byte_range.start <= at && at < s.byte_range.end) else { continue };
+        if job.sections[i].byte_range.start == at {
+            job.sections[i].leading_space += space;
+        } else {
+            let mut tail = job.sections[i].clone();
+            tail.byte_range.start = at;
+            tail.leading_space = space;
+            job.sections[i].byte_range.end = at;
+            job.sections.insert(i + 1, tail);
+        }
+    }
+    Some(job)
 }
 
 #[cfg(test)]

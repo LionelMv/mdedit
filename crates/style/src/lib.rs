@@ -273,8 +273,9 @@ pub enum Decoration {
     Bullet { range: Range<usize>, depth: u8 },
     /// Image shown below the row containing `range`; `url` as written in the source.
     Image { range: Range<usize>, url: String, alt: String },
-    /// Table cell borders: one rect per cell built from these cell ranges.
-    TableGrid { rows: Vec<Vec<Range<usize>>>, color: Color32 },
+    /// Table: cell content ranges per row, and each column's alignment. The editor lines the
+    /// cells up in columns and draws the borders.
+    TableGrid { rows: Vec<Vec<Range<usize>>>, aligns: Vec<mdedit_syntax::Align>, color: Color32 },
     /// Clickable link (Ctrl+click opens).
     Link { range: Range<usize>, url: String },
 }
@@ -542,8 +543,8 @@ impl Ctx<'_> {
                 self.code_block(b, info);
                 return;
             }
-            BlockKind::Table { rows, .. } => {
-                self.table(b, rows);
+            BlockKind::Table { aligns, rows } => {
+                self.table(b, aligns, rows);
             }
             BlockKind::Html => {
                 let (cs, muted) = (t.code_size, t.muted);
@@ -807,12 +808,13 @@ impl Ctx<'_> {
         self.deco(Decoration::CodeHeader { range: header, lang, code });
     }
 
-    fn table(&mut self, b: &Block, rows: &[mdedit_syntax::TableRow]) {
+    fn table(&mut self, b: &Block, aligns: &[mdedit_syntax::Align], rows: &[mdedit_syntax::TableRow]) {
         let t = self.theme;
-        let cs = t.code_size;
+        // Proportional text: the editor aligns the columns, so monospace isn't needed (and
+        // has no bold face for the header).
+        let size = t.body_size * 0.95;
         self.apply(&b.range, |s| {
-            s.mono = true;
-            s.size = cs;
+            s.size = size;
             s.lh = 1.6;
         });
         // Pipes: transparent at full width unless focused (keeps cells aligned with the
@@ -850,7 +852,7 @@ impl Ctx<'_> {
             }
             grid.push(row.cells.iter().map(|c| self.rel(c)).collect::<Vec<_>>());
         }
-        self.deco(Decoration::TableGrid { rows: grid, color: t.table_border });
+        self.deco(Decoration::TableGrid { rows: grid, aligns: aligns.to_vec(), color: t.table_border });
     }
 
     /// For front matter / math blocks whose content range isn't split out: the first and the
