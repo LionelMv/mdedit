@@ -4,7 +4,7 @@
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
-use mdedit_syntax::Block;
+use mdedit_syntax::{Block, BlockKind};
 
 /// Chunks bigger than this are split at line boundaries for display, so a huge code block
 /// (or a misbehaving chunker) never produces one gigantic galley.
@@ -72,6 +72,80 @@ pub(crate) fn display_chunks(text: &str, style_chunks: &[mdedit_style::Chunk]) -
         out.push(DChunk { range: text.len()..text.len(), block: None });
     }
     out
+}
+
+/// Give each code block nested in a list or quote a display chunk of its own (from the start
+/// of its opening fence line to the start of the next non-blank line), so it gets a full code
+/// card (padding, header row) instead of being laid out inside the list's text.
+pub(crate) fn split_nested_code(text: &str, blocks: &[Block], chunks: Vec<DChunk>) -> Vec<DChunk> {
+    let mut out = Vec::with_capacity(chunks.len());
+    for c in chunks {
+        let codes = c.block.and_then(|i| blocks.get(i)).map(nested_code).unwrap_or_default();
+        let mut cuts: Vec<usize> = Vec::new();
+        for r in codes {
+            cuts.push(line_start(text, r.start));
+            cuts.push(after_code(text, r.end));
+        }
+        cuts.retain(|&p| p > c.range.start && p < c.range.end);
+        cuts.sort_unstable();
+        cuts.dedup();
+        let mut start = c.range.start;
+        for p in cuts.into_iter().chain(std::iter::once(c.range.end)) {
+            if p > start {
+                out.push(DChunk { range: start..p, block: c.block });
+                start = p;
+            }
+        }
+        if start < c.range.end || c.range.is_empty() {
+            out.push(DChunk { range: start..c.range.end, block: c.block });
+        }
+    }
+    out
+}
+
+/// Whether chunk `c` is a code block nested in its list / quote (see [`split_nested_code`]).
+pub(crate) fn is_nested_code(text: &str, blocks: &[Block], c: &DChunk) -> bool {
+    c.block
+        .and_then(|i| blocks.get(i))
+        .is_some_and(|b| nested_code(b).iter().any(|r| line_start(text, r.start) == c.range.start))
+}
+
+/// Ranges of the code blocks inside a list or block quote (any depth).
+fn nested_code(b: &Block) -> Vec<Range<usize>> {
+    fn walk(b: &Block, out: &mut Vec<Range<usize>>) {
+        for c in &b.children {
+            if matches!(c.kind, BlockKind::CodeBlock(_)) {
+                out.push(c.range.clone());
+            } else {
+                walk(c, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if matches!(b.kind, BlockKind::List { .. } | BlockKind::BlockQuote) {
+        walk(b, &mut out);
+    }
+    out
+}
+
+fn line_start(text: &str, at: usize) -> usize {
+    let at = floor_boundary(text, at);
+    text.as_bytes()[..at].iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1)
+}
+
+/// After the line containing `end` and any blank lines that follow it.
+fn after_code(text: &str, end: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut p = floor_boundary(text, end);
+    p = bytes[p..].iter().position(|&b| b == b'\n').map_or(text.len(), |i| p + i + 1);
+    while p < text.len() {
+        let e = bytes[p..].iter().position(|&b| b == b'\n').map_or(text.len(), |i| p + i + 1);
+        if !text[p..e].trim().is_empty() {
+            break;
+        }
+        p = e;
+    }
+    p
 }
 
 /// Split `range` into pieces of at most ~MAX_CHUNK_BYTES ending after a `\n` where possible.
@@ -288,6 +362,18 @@ pub(crate) fn common_affixes(a: &str, b: &str) -> (usize, usize) {
 mod tests {
     use super::*;
     use mdedit_style::Chunk;
+
+    #[test]
+    fn nested_code_gets_its_own_chunk() {
+        let text = "1. Step:\n\n   ```bash\n   echo hi\n   ```\n\n2. Next\n";
+        let blocks = mdedit_syntax::parse(text);
+        let chunks = split_nested_code(text, &blocks, display_chunks(text, &mdedit_style::chunks(text, &blocks)));
+        let pieces: Vec<&str> = chunks.iter().map(|c| &text[c.range.clone()]).collect();
+        assert_eq!(pieces, ["1. Step:\n\n", "   ```bash\n   echo hi\n   ```\n\n", "2. Next\n", ""]);
+        assert!(chunks.iter().take(3).all(|c| c.block == Some(0)), "pieces keep the list block");
+        let flags: Vec<bool> = chunks.iter().map(|c| is_nested_code(text, &blocks, c)).collect();
+        assert_eq!(flags, [false, true, false, false]);
+    }
 
     fn ch(r: Range<usize>) -> Chunk {
         Chunk { range: r, block: Some(0) }

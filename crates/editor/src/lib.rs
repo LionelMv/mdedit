@@ -443,7 +443,7 @@ impl EditorState {
         let t1 = t0.elapsed();
         let style_chunks = mdedit_style::chunks(&text, &blocks);
         let t2 = t0.elapsed();
-        let chunks = model::display_chunks(&text, &style_chunks);
+        let chunks = model::split_nested_code(&text, &blocks, model::display_chunks(&text, &style_chunks));
         // Word count is deferred for big documents (see `update_counts`).
         let counts = if text.len() <= BIG_DOC { mdedit_syntax::word_count(&text, &blocks) } else { self.model.counts };
         self.counts_dirty = text.len() > BIG_DOC;
@@ -548,7 +548,7 @@ impl EditorState {
         // the editor adds the card's horizontal padding and extra vertical room.
         let card = c.block.and_then(|b| self.model.blocks.get(b)).is_some_and(|b| {
             matches!(b.kind, mdedit_syntax::BlockKind::CodeBlock(_) | mdedit_syntax::BlockKind::FrontMatter | mdedit_syntax::BlockKind::MathBlock)
-        });
+        }) || model::is_nested_code(text, &self.model.blocks, &c);
         let (pad_h, pad_v) = if card { (CARD_PAD_H, CARD_PAD_V) } else { (0.0, 0.0) };
         let styled = mdedit_style::style_chunk(&mdedit_style::StyleInput {
             text,

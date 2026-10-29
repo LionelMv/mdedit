@@ -296,19 +296,14 @@ fn code_block_card_and_highlight() {
 #[test]
 fn indented_code() {
     let text = "    let a = 1;\n    b\n";
-    let info = CodeBlockInfo {
-        fence: None,
-        info: String::new(),
-        lang: None,
-        closed: true,
-        open_fence: None,
-        close_fence: None,
-    };
-    let blocks = vec![blk(BlockKind::CodeBlock(info), 0..20, 0..20)];
+    let blocks = mdedit_syntax::parse(text);
     let cs = check_contract(text, &blocks);
     let s = style(text, &blocks, &cs[0], Mode::LivePreview, false, &Theme::dark());
-    assert_eq!(text_where(&s, hidden), "");
-    assert!(s.decorations.contains(&Decoration::CodeHeader { range: 0..14, lang: String::new(), code: 0..20 }));
+    // The 4-space indents are syntax, not code: hidden in live preview so the code lines up
+    // with the card padding.
+    assert_eq!(text_where(&s, hidden), "        ");
+    assert_eq!(visible_text(&s), "let a = 1;\nb");
+    assert!(s.decorations.iter().any(|d| matches!(d, Decoration::CodeHeader { .. })));
 }
 
 #[test]
@@ -659,7 +654,8 @@ fn code_in_quote_highlights_without_prefixes() {
         }
     }
     assert!(colours.len() >= 2, "{colours:?}");
-    assert_eq!(text_where(&s, |f| f.color == Color32::TRANSPARENT && !hidden(f)), "> > > ");
+    // Only the code line's `> ` keeps its width; the fence lines are hidden with their prefix.
+    assert_eq!(text_where(&s, |f| f.color == Color32::TRANSPARENT && !hidden(f)), "> ");
     // The highlighter saw the code without prefixes.
     let b = &blocks[0].children[0];
     let lines = mdedit_syntax::code_lines(text, b);
@@ -748,5 +744,23 @@ fn deep_inline_nesting_is_fast() {
     let took = started.elapsed();
     if !cfg!(debug_assertions) {
         assert!(took < std::time::Duration::from_millis(500), "{took:?}");
+    }
+}
+
+#[test]
+fn chunk_inside_a_list_has_no_outside_decorations() {
+    // The editor gives a code block nested in a list a chunk of its own; the list's other
+    // parts must not leave empty (phantom) decorations at its edges, and vice versa.
+    let text = "- one\n\n  ```bash\n  x\n  ```\n\n- two\n";
+    let blocks = mdedit_syntax::parse(text);
+    let t = Theme::dark();
+    let a = text.find("  ```").unwrap();
+    let b = text.find("- two").unwrap();
+    for (r, want_card, want_bullets) in [(0..a, false, 1), (a..b, true, 0), (b..text.len(), false, 1)] {
+        let chunk = Chunk { range: r.clone(), block: Some(0) };
+        let s = style(text, &blocks, &chunk, Mode::LivePreview, false, &t);
+        let cards = s.decorations.iter().filter(|d| matches!(d, Decoration::Card { .. })).count();
+        let bullets = s.decorations.iter().filter(|d| matches!(d, Decoration::Bullet { .. })).count();
+        assert_eq!((cards > 0, bullets), (want_card, want_bullets), "{r:?}: {:?}", s.decorations);
     }
 }

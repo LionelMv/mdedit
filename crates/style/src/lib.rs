@@ -457,6 +457,23 @@ impl Ctx<'_> {
         }
     }
 
+    /// Start of the whitespace-only indentation before `at` on its line (`at` itself if there
+    /// is other text, such as a `> ` quote marker, before it).
+    fn indent_start(&self, at: usize) -> usize {
+        let ls = line_start(self.text, at);
+        match self.text.get(ls..at) {
+            Some(p) if p.chars().all(|c| c == ' ' || c == '\t') => ls,
+            _ => at,
+        }
+    }
+
+    /// Whether `abs` overlaps this chunk. A chunk can be part of a block (the editor gives
+    /// code blocks nested in lists a chunk of their own); parts outside it must not produce
+    /// decorations, which would otherwise be clamped to an empty range at the chunk edge.
+    fn in_chunk(&self, abs: &Range<usize>) -> bool {
+        abs.start < self.base + self.body.len() && abs.end > self.base
+    }
+
     fn byte(&self, abs: usize) -> Option<u8> {
         self.text.as_bytes().get(abs).copied()
     }
@@ -484,7 +501,7 @@ impl Ctx<'_> {
 
     fn style_block(&mut self, b: &Block, d: Depth) {
         let d = Depth { nest: d.nest.saturating_add(1), ..d };
-        if d.nest > MAX_BLOCK_NEST {
+        if d.nest > MAX_BLOCK_NEST || !self.in_chunk(&b.range) {
             return;
         }
         let t = self.theme;
@@ -641,6 +658,9 @@ impl Ctx<'_> {
         let BlockKind::ListItem { task, checkbox } = &item.kind else {
             return;
         };
+        if !self.in_chunk(&item.range) {
+            return;
+        }
         let bytes = self.text.as_bytes();
         let end = item.range.end.min(bytes.len());
         let mut i = item.range.start.min(end);
@@ -651,7 +671,7 @@ impl Ctx<'_> {
         if is_bullet && !ordered {
             let m = i..i + 1;
             self.vis(&m, Vis::Ghost);
-            if !self.show {
+            if !self.show && self.in_chunk(&m) {
                 let r = self.rel(&m);
                 self.deco(Decoration::Bullet { range: r, depth: d.list.max(1) });
             }
@@ -685,7 +705,7 @@ impl Ctx<'_> {
                     s.strike = true;
                 });
             }
-            if !self.show {
+            if !self.show && self.in_chunk(cb) {
                 let r = self.rel(cb);
                 self.deco(Decoration::Checkbox { range: r, checked: *checked });
             }
@@ -718,7 +738,12 @@ impl Ctx<'_> {
         });
         let marker_col = t.marker;
         for f in open.iter().chain(close.iter()) {
-            let r = self.with_newline(f);
+            // Include the container prefix (list indent, `> `) so the hidden fence line of a
+            // nested block takes no room.
+            let ls = line_start(self.text, f.start);
+            let prefix = self.text.get(ls..f.start.max(ls)).unwrap_or("x");
+            let ls = if prefix.chars().all(|c| matches!(c, ' ' | '\t' | '>')) { ls } else { f.start };
+            let r = self.with_newline(&(ls..f.end));
             self.vis(&r, Vis::Marker);
             if self.show {
                 self.apply(f, |s| s.color = marker_col);
@@ -748,6 +773,13 @@ impl Ctx<'_> {
             if l.start > prev_end {
                 // Between the previous line's end and this line's start: newline + prefix.
                 self.apply(&(prev_end..l.start), |s| s.color = muted);
+            }
+            // Indentation before the code (list indent, the 4 spaces of indented code) is
+            // syntax: hidden in live preview so the code lines up with the card padding and
+            // with its own wrapped lines.
+            let ind = self.indent_start(l.start);
+            if ind < l.start {
+                self.vis(&(ind..l.start), Vis::Marker);
             }
             prev_end = prev_end.max(l.end);
         }

@@ -640,3 +640,25 @@ fn table_cells_line_up_in_columns() {
     assert!((e1 - e3).abs() < 1.0 && (e2 - e3).abs() < 1.0, "right column ends: {e1} {e2} {e3}");
     assert!(x(&mut h, "Value") > end(&mut h, "New sudo user"), "columns don't overlap");
 }
+
+#[test]
+fn code_nested_in_list_does_not_overlap_item_text() {
+    let text = "1. **Generate the key:**\n\n   ```bash\n   ssh-keygen -t ed25519\n   ```\n\n2. Next\n";
+    let mut h = H::new(text);
+    h.set_caret(text.len());
+    h.frame(vec![]);
+    let card = h.decos().into_iter().find_map(|d| match d {
+        DecoGeom::Card { rect, .. } => Some(rect),
+        _ => None,
+    });
+    let Some(card) = card else { panic!("no card for the nested code block") };
+    let off = h.ed.anchor_offset();
+    let item = h.pos_of(text.find("Generate").unwrap()).y + off;
+    let code = h.pos_of(text.find("ssh-keygen").unwrap()).y + off;
+    let next = h.pos_of(text.find("Next").unwrap()).y + off;
+    assert!(item < card.min.y, "item text above the card: {item} vs {card:?}");
+    assert!(card.min.y < code && code < card.max.y, "code inside the card");
+    assert!(card.max.y < next, "next item below the card");
+    // The code lines up with the card padding (the list indent is hidden).
+    assert!(h.pos_of(text.find("ssh-keygen").unwrap()).x - card.min.x < CARD_PAD_H + 8.0);
+}
