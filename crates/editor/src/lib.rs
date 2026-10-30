@@ -159,6 +159,8 @@ struct Laid {
     indent: f32,
     /// Height of the code card's header row (language + copy), reserved above the code.
     header_h: f32,
+    /// Left offset of a code card nested in a list item or quote (from the text column).
+    card_x: f32,
 }
 
 /// Scroll position relative to a chunk: the viewport top is `dy` below the top of the chunk
@@ -238,6 +240,8 @@ enum DecoGeom {
     Rule { y: f32, x0: f32, x1: f32, color: Color32 },
     Checkbox { rect: Rect, checked: bool, at: usize },
     Bullet { center: Pos2, r: f32, depth: u8 },
+    /// Ordered-list number, right-aligned at `pos`.
+    Number { pos: Pos2, text: String },
     Image { rect: Rect, slot: ImageSlot },
     Lines { lines: Vec<[Pos2; 2]>, color: Color32 },
     Link { rects: Vec<Rect>, url: String },
@@ -548,8 +552,22 @@ impl EditorState {
         // the editor adds the card's horizontal padding and extra vertical room.
         let card = c.block.and_then(|b| self.model.blocks.get(b)).is_some_and(|b| {
             matches!(b.kind, mdedit_syntax::BlockKind::CodeBlock(_) | mdedit_syntax::BlockKind::FrontMatter | mdedit_syntax::BlockKind::MathBlock)
-        }) || model::is_nested_code(text, &self.model.blocks, &c);
+        });
+        let nested_code = model::is_nested_code(text, &self.model.blocks, &c);
+        let card = card || nested_code;
         let (pad_h, pad_v) = if card { (CARD_PAD_H, CARD_PAD_V) } else { (0.0, 0.0) };
+        // Lists (live preview): each item is indented by its depth, the bullet / number sits in
+        // the indent. A nested code card lines up with its item's text, or inside the quote.
+        let (lists, quotes) = match c.block.and_then(|b| self.model.blocks.get(b)) {
+            Some(b) if self.mode == Mode::LivePreview && matches!(b.kind, mdedit_syntax::BlockKind::List { .. } | mdedit_syntax::BlockKind::BlockQuote) => {
+                model::container_depth(text, b, c.range.start)
+            }
+            _ => (0, 0),
+        };
+        let body = env.theme.body_size;
+        let list_x = if lists > 0 { body * (LIST_INDENT + LIST_STEP * f32::from(lists - 1)) } else { 0.0 };
+        let card_x = if nested_code { list_x + f32::from(quotes) * QUOTE_STEP } else { 0.0 };
+        let extra = if nested_code { card_x } else { list_x };
         let styled = mdedit_style::style_chunk(&mdedit_style::StyleInput {
             text,
             blocks: &self.model.blocks,
@@ -560,7 +578,7 @@ impl EditorState {
             highlighter: env.hl,
             wrap_width: (self.col_w - 2.0 * pad_h).max(10.0),
         });
-        let indent = if styled.indent.is_finite() { styled.indent.clamp(0.0, self.col_w * 0.8) } else { 0.0 } + pad_h;
+        let indent = if styled.indent.is_finite() { styled.indent.clamp(0.0, self.col_w * 0.8) } else { 0.0 } + pad_h + extra.min(self.col_w * 0.6);
         let mut job = styled.job;
         let mut decorations = styled.decorations;
         if job.text != expected {
@@ -598,6 +616,7 @@ impl EditorState {
             space_after: fin(styled.space_after) + pad_v + if has_header { 8.0 } else { 0.0 },
             indent,
             header_h,
+            card_x: card_x.min(self.col_w * 0.6),
         });
         self.cache.insert(key, CacheEntry { laid: laid.clone(), used: self.frame });
         laid
@@ -835,7 +854,7 @@ impl EditorState {
                         let (s, e) = chars(range);
                         if let Some((y0, y1)) = rows_y(s, e) {
                             let top = y0 - CARD_PAD_V - v.g.laid.header_h;
-                            let rect = Rect::from_min_max(pos2(col_l, top), pos2(col_r, y1 + CARD_PAD_V));
+                            let rect = Rect::from_min_max(pos2(col_l + v.g.laid.card_x, top), pos2(col_r, y1 + CARD_PAD_V));
                             ds.push(DecoGeom::Card { rect, fill: *fill, stroke: *stroke });
                         }
                     }
@@ -843,7 +862,7 @@ impl EditorState {
                         let (s, e) = chars(range);
                         if let Some((y0, y1)) = rows_y(s, e) {
                             let hh = v.g.laid.header_h;
-                            let card = Rect::from_min_max(pos2(col_l, y0 - CARD_PAD_V - hh), pos2(col_r, y1 + CARD_PAD_V));
+                            let card = Rect::from_min_max(pos2(col_l + v.g.laid.card_x, y0 - CARD_PAD_V - hh), pos2(col_r, y1 + CARD_PAD_V));
                             // Copy button: a square at the right end of the header row.
                             let side = (hh - 8.0).max(16.0);
                             let button = Rect::from_center_size(pos2(col_r - CARD_PAD_H + 4.0 - side / 2.0, card.min.y + hh / 2.0 + 2.0), vec2(side, side));
@@ -862,6 +881,9 @@ impl EditorState {
                     Decoration::QuoteBar { range, color, depth } => {
                         let (s, e) = chars(range);
                         if let Some((y0, y1)) = rows_y(s, e) {
+                            // Cover the chunk's padding too, so the bar runs alongside a code
+                            // card nested in the quote (its header and padding are space_before).
+                            let (y0, y1) = (y0 - v.g.laid.space_before, y1 + v.g.laid.space_after);
                             let x = col_l + f32::from(depth.saturating_sub(1)) * 14.0 + 2.0;
                             ds.push(DecoGeom::Bar { rect: Rect::from_min_max(pos2(x, y0), pos2(x + 3.0, y1)), color: *color });
                         }
@@ -894,8 +916,16 @@ impl EditorState {
                         if let Some((row, r)) = geom::range_rects(galley, s, e.max(s + 1), 0.0).first().copied() {
                             let r = to_c(row, r);
                             let rad = (theme.body_size * 0.17).max(2.0);
-                            let x = if r.width() >= rad * 3.0 { r.center().x } else { r.min.x - rad * 3.0 };
+                            // The marker is hidden: the bullet goes in the list indent.
+                            let x = r.min.x - theme.body_size * 0.85;
                             ds.push(DecoGeom::Bullet { center: pos2(x, r.center().y), r: rad, depth: *depth });
+                        }
+                    }
+                    Decoration::ListNumber { range, text } => {
+                        let (s, e) = chars(range);
+                        if let Some((row, r)) = geom::range_rects(galley, s, e.max(s + 1), 0.0).first().copied() {
+                            let r = to_c(row, r);
+                            ds.push(DecoGeom::Number { pos: pos2(r.min.x - theme.body_size * 0.4, r.center().y), text: text.clone() });
                         }
                     }
                     Decoration::Image { .. } => {}
@@ -1035,6 +1065,9 @@ impl EditorState {
                         } else {
                             painter.rect(r, 3.0, theme.bg, stroke, StrokeKind::Inside);
                         }
+                    }
+                    DecoGeom::Number { pos, text } => {
+                        painter.text(*pos + off, egui::Align2::RIGHT_CENTER, text, egui::FontId::proportional(theme.body_size), theme.muted);
                     }
                     DecoGeom::Bullet { center, r, depth } => {
                         let c = *center + off;
@@ -1726,6 +1759,12 @@ fn table_lines(
     }
     lines
 }
+
+/// List text indent of the first level and of each further level, in body-font sizes.
+const LIST_INDENT: f32 = 1.6;
+const LIST_STEP: f32 = 1.5;
+/// Offset of a code card per enclosing block quote (clears the quote bar).
+const QUOTE_STEP: f32 = 18.0;
 
 /// Space between table columns (cell padding on both sides of a border).
 const CELL_GAP: f32 = 28.0;

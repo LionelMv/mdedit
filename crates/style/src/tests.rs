@@ -40,6 +40,7 @@ fn deco_ranges(d: &Decoration) -> Vec<Range<usize>> {
         | Decoration::Rule { range, .. }
         | Decoration::Checkbox { range, .. }
         | Decoration::Bullet { range, .. }
+        | Decoration::ListNumber { range, .. }
         | Decoration::Image { range, .. }
         | Decoration::Link { range, .. } => vec![range.clone()],
         Decoration::CodeHeader { range, code, .. } => vec![range.clone(), code.clone()],
@@ -355,13 +356,18 @@ fn list_with_tasks_and_nesting() {
     assert!(d.contains(&Decoration::Bullet { range: 18..19, depth: 2 }), "{d:?}");
     assert!(d.contains(&Decoration::Checkbox { range: 2..5, checked: false }));
     assert!(d.contains(&Decoration::Checkbox { range: 10..13, checked: true }));
-    // Markers transparent but not tiny (they keep their width).
-    assert_eq!(text_where(&s, hidden), "");
-    assert_eq!(text_where(&s, |f| f.color == Color32::TRANSPARENT), "-[ ]-[x]-");
+    // List markers and indentation take no room (the editor indents items and draws the
+    // bullets in the indent); task boxes keep their width under the drawn checkbox.
+    assert_eq!(text_where(&s, hidden), "- -   - ");
+    assert_eq!(text_where(&s, |f| f.color == Color32::TRANSPARENT && !hidden(f)), "[ ][x]");
 
     let s = style(text, &blocks, &cs[0], Mode::LivePreview, true, &t);
     assert!(!s.decorations.iter().any(|d| matches!(d, Decoration::Bullet { .. } | Decoration::Checkbox { .. })));
     let s = style(text, &blocks, &cs[1], Mode::LivePreview, false, &t);
+    assert_eq!(visible_text(&s), "d");
+    assert!(s.decorations.contains(&Decoration::ListNumber { range: 0..2, text: "1.".into() }), "{:?}", s.decorations);
+    // While editing, the number is plain text.
+    let s = style(text, &blocks, &cs[1], Mode::LivePreview, true, &t);
     assert_eq!(visible_text(&s), "1. d");
 }
 
@@ -654,8 +660,8 @@ fn code_in_quote_highlights_without_prefixes() {
         }
     }
     assert!(colours.len() >= 2, "{colours:?}");
-    // Only the code line's `> ` keeps its width; the fence lines are hidden with their prefix.
-    assert_eq!(text_where(&s, |f| f.color == Color32::TRANSPARENT && !hidden(f)), "> ");
+    // The `> ` prefixes are hidden in the code (the editor offsets the card inside the quote).
+    assert_eq!(text_where(&s, |f| f.color == Color32::TRANSPARENT && !hidden(f)), "");
     // The highlighter saw the code without prefixes.
     let b = &blocks[0].children[0];
     let lines = mdedit_syntax::code_lines(text, b);

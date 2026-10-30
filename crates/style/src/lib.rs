@@ -269,8 +269,10 @@ pub enum Decoration {
     Rule { range: Range<usize>, color: Color32 },
     /// Clickable checkbox drawn over the (hidden) `[ ]` at `range`.
     Checkbox { range: Range<usize>, checked: bool },
-    /// Bullet glyph drawn over the hidden list marker at `range`.
+    /// Bullet glyph drawn left of the hidden list marker at `range` (in the list indent).
     Bullet { range: Range<usize>, depth: u8 },
+    /// Number of an ordered list item (`1.`), drawn left of the hidden marker at `range`.
+    ListNumber { range: Range<usize>, text: String },
     /// Image shown below the row containing `range`; `url` as written in the source.
     Image { range: Range<usize>, url: String, alt: String },
     /// Table: cell content ranges per row, and each column's alignment. The editor lines the
@@ -457,12 +459,12 @@ impl Ctx<'_> {
         }
     }
 
-    /// Start of the whitespace-only indentation before `at` on its line (`at` itself if there
-    /// is other text, such as a `> ` quote marker, before it).
+    /// Start of the container prefix before `at` on its line: indentation and `>` quote
+    /// markers (`at` itself if there is other text before it).
     fn indent_start(&self, at: usize) -> usize {
         let ls = line_start(self.text, at);
         match self.text.get(ls..at) {
-            Some(p) if p.chars().all(|c| c == ' ' || c == '\t') => ls,
+            Some(p) if p.chars().all(|c| matches!(c, ' ' | '\t' | '>')) => ls,
             _ => at,
         }
     }
@@ -540,6 +542,17 @@ impl Ctx<'_> {
                 }
             }
             BlockKind::List { ordered, .. } => {
+                // Source indentation is hidden in live preview: the editor indents each item by
+                // its depth (so wrapped lines line up with the item's text).
+                let mut ls = line_start(self.text, b.range.start);
+                while ls < b.range.end.min(self.text.len()) {
+                    let le = self.text[ls..].find('\n').map_or(self.text.len(), |p| ls + p);
+                    let ws = self.text[ls..le].len() - self.text[ls..le].trim_start_matches([' ', '\t']).len();
+                    if ws > 0 && ws < le - ls {
+                        self.vis(&(ls..ls + ws), Vis::Marker);
+                    }
+                    ls = le + 1;
+                }
                 let nd = Depth { list: d.list.saturating_add(1), ..d };
                 for c in &b.children {
                     if let BlockKind::ListItem { .. } = c.kind {
@@ -667,16 +680,23 @@ impl Ctx<'_> {
         while i < end && (bytes[i] == b' ' || bytes[i] == b'\t') {
             i += 1;
         }
+        // The marker and the spaces after it are hidden in live preview; the bullet or number
+        // is drawn as a decoration in the list indent. Shown as text while editing.
+        let after_spaces = |mut e: usize| {
+            while e < end && (bytes[e] == b' ' || bytes[e] == b'\t') {
+                e += 1;
+            }
+            e
+        };
         let is_bullet = i < end && matches!(bytes[i], b'-' | b'*' | b'+');
         if is_bullet && !ordered {
             let m = i..i + 1;
-            self.vis(&m, Vis::Ghost);
+            self.vis(&(item.range.start..after_spaces(i + 1)), Vis::Marker);
             if !self.show && self.in_chunk(&m) {
                 let r = self.rel(&m);
                 self.deco(Decoration::Bullet { range: r, depth: d.list.max(1) });
             }
         } else if is_bullet || i < end && bytes[i].is_ascii_digit() {
-            // Ordered list: keep the number visible but muted.
             let mut e = i;
             while e < end && bytes[e].is_ascii_digit() {
                 e += 1;
@@ -686,6 +706,12 @@ impl Ctx<'_> {
             }
             let muted = self.theme.muted;
             self.apply(&(i..e), |s| s.color = muted);
+            self.vis(&(item.range.start..after_spaces(e)), Vis::Marker);
+            if !self.show && self.in_chunk(&(i..e)) {
+                let r = self.rel(&(i..e));
+                let text = self.text.get(i..e).unwrap_or_default().to_string();
+                self.deco(Decoration::ListNumber { range: r, text });
+            }
         }
         if let (Some(checked), Some(cb)) = (task, checkbox) {
             self.vis(cb, Vis::Ghost);

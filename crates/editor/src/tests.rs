@@ -662,3 +662,45 @@ fn code_nested_in_list_does_not_overlap_item_text() {
     // The code lines up with the card padding (the list indent is hidden).
     assert!(h.pos_of(text.find("ssh-keygen").unwrap()).x - card.min.x < CARD_PAD_H + 8.0);
 }
+
+#[test]
+fn list_items_are_indented_with_hanging_wrap() {
+    let long = "word ".repeat(60);
+    let text = format!("Body text.\n\n- {long}\n  - nested\n    - third\n");
+    let mut h = H::new(&text);
+    h.set_caret(0);
+    h.frame(vec![]);
+    let x = |h: &mut H, at: usize| h.pos_of(at).x;
+    let body = x(&mut h, 0);
+    let item = x(&mut h, text.find("word").unwrap());
+    let nested = x(&mut h, text.find("nested").unwrap());
+    let third = x(&mut h, text.find("third").unwrap());
+    assert!(item > body + 10.0, "items are indented: {body} -> {item}");
+    assert!(nested > item + 10.0 && third > nested + 10.0, "levels step in: {item} {nested} {third}");
+    // A byte on the wrapped second row lines up with the item's text.
+    let first_y = h.pos_of(text.find("word").unwrap()).y;
+    let wrapped = (text.find("word").unwrap()..text.find("\n  - nested").unwrap())
+        .step_by(5)
+        .find(|&b| h.pos_of(b).y > first_y + 5.0)
+        .expect("the long item wraps");
+    assert!((x(&mut h, wrapped) - item).abs() < 1.0, "wrapped row starts under the text");
+}
+
+#[test]
+fn code_card_in_quote_is_right_of_the_bar() {
+    let text = "> Quote:\n>\n> ```rust\n> let x = 1;\n> ```\n\nend\n";
+    let mut h = H::new(text);
+    h.set_caret(text.len());
+    h.frame(vec![]);
+    let decos = h.decos();
+    let bar = decos.iter().find_map(|d| match d {
+        DecoGeom::Bar { rect, .. } => Some(*rect),
+        _ => None,
+    });
+    let card = decos.iter().find_map(|d| match d {
+        DecoGeom::Card { rect, .. } => Some(*rect),
+        _ => None,
+    });
+    let (Some(bar), Some(card)) = (bar, card) else { panic!("bar and card: {bar:?} {card:?}") };
+    assert!(card.min.x > bar.max.x, "card {card:?} right of bar {bar:?}");
+}

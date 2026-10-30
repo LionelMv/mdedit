@@ -74,17 +74,22 @@ pub(crate) fn display_chunks(text: &str, style_chunks: &[mdedit_style::Chunk]) -
     out
 }
 
-/// Give each code block nested in a list or quote a display chunk of its own (from the start
-/// of its opening fence line to the start of the next non-blank line), so it gets a full code
-/// card (padding, header row) instead of being laid out inside the list's text.
+/// Split list and quote chunks for display: each list item starts a chunk (the editor indents
+/// it by its depth, so wrapped lines line up with the item's text), and each code block nested
+/// in a list or quote gets a chunk of its own (from its opening fence line to the next
+/// non-blank line), so it gets a full code card instead of being laid out inside the text.
 pub(crate) fn split_nested_code(text: &str, blocks: &[Block], chunks: Vec<DChunk>) -> Vec<DChunk> {
     let mut out = Vec::with_capacity(chunks.len());
     for c in chunks {
-        let codes = c.block.and_then(|i| blocks.get(i)).map(nested_code).unwrap_or_default();
+        let top = c.block.and_then(|i| blocks.get(i));
+        let codes = top.map(nested_code).unwrap_or_default();
         let mut cuts: Vec<usize> = Vec::new();
         for r in codes {
             cuts.push(line_start(text, r.start));
             cuts.push(after_code(text, r.end));
+        }
+        if let Some(b) = top.filter(|b| matches!(b.kind, BlockKind::List { .. })) {
+            list_item_starts(b, &mut |at| cuts.push(line_start(text, at)));
         }
         cuts.retain(|&p| p > c.range.start && p < c.range.end);
         cuts.sort_unstable();
@@ -108,6 +113,34 @@ pub(crate) fn is_nested_code(text: &str, blocks: &[Block], c: &DChunk) -> bool {
     c.block
         .and_then(|i| blocks.get(i))
         .is_some_and(|b| nested_code(b).iter().any(|r| line_start(text, r.start) == c.range.start))
+}
+
+/// Nesting of the containers around line start `at` inside top-level block `b`: (list depth,
+/// quote depth). List depth counts the list items `at` is in.
+pub(crate) fn container_depth(text: &str, b: &Block, at: usize) -> (u8, u8) {
+    let (mut lists, mut quotes) = (0u8, 0u8);
+    let mut cur = b;
+    loop {
+        match cur.kind {
+            BlockKind::ListItem { .. } => lists = lists.saturating_add(1),
+            BlockKind::BlockQuote => quotes = quotes.saturating_add(1),
+            _ => {}
+        }
+        // Children start after their line's indentation / `> `: compare from the line start.
+        match cur.children.iter().find(|c| line_start(text, c.range.start) <= at && at <= c.range.end) {
+            Some(n) => cur = n,
+            None => return (lists, quotes),
+        }
+    }
+}
+
+fn list_item_starts(b: &Block, f: &mut impl FnMut(usize)) {
+    for c in &b.children {
+        if matches!(c.kind, BlockKind::ListItem { .. }) {
+            f(c.range.start);
+        }
+        list_item_starts(c, f);
+    }
 }
 
 /// Ranges of the code blocks inside a list or block quote (any depth).
