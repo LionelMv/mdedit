@@ -139,9 +139,8 @@ Implement `code-blocks.md` fully:
 ## M6 — Application shell (2 weeks)
 
 1. Tabs (multiple documents), dirty markers, close-confirm dialog.
-2. Sidebar: file tree of an opened folder (`notify` watcher), outline/TOC from
-   headings (click to scroll), search in folder (use the `grep-searcher` +
-   `ignore` crates, respects `.gitignore`).
+2. Sidebar: outline/TOC from headings (click to scroll), collapsible. (A folder tree
+   and folder search were built and then removed as unnecessary.)
 3. Find & replace in document (regex, case, whole word), highlights all matches.
 4. Command palette (`Ctrl+Shift+P`) and quick-insert `/` menu (MarkText's
    `paragraphQuickInsertMenu`).
@@ -152,8 +151,9 @@ Implement `code-blocks.md` fully:
 8. Menus + keyboard shortcuts (configurable keymap TOML), matching MarkText's
    defaults where sensible.
 9. Status bar: word/char count, reading time, line:col, encoding, line endings.
-10. CLI: `mdedit file.md`, `mdedit folder/`, single-instance via D-Bus
-    (`zbus`) so a second launch opens a tab in the running window.
+10. CLI: `mdedit file.md`, single-instance over a private Unix socket so a second
+    launch opens a tab in the running window (preference, on by default). The open
+    files are reopened at the next start (preference, on by default).
 
 ---
 

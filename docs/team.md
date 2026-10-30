@@ -8,11 +8,11 @@ the crate you own before writing code.
 
 | Agent | Owns | Main deliverable |
 |---|---|---|
-| **buffer** | `crates/buffer`, `crates/workspace` | Rope buffer, undo/redo, movement, search, Document load/save, config, recent files, recovery, folder tree/search, watcher |
+| **buffer** | `crates/buffer`, `crates/workspace` | Rope buffer, undo/redo, movement, search, Document load/save, config, recent files, session, recovery, watcher |
 | **syntax** | `crates/syntax`, `crates/export` | `parse()` block index with byte ranges, inline spans, outline, word count, editing commands, HTML export |
 | **style** | `crates/style`, `crates/highlight` | syntect highlighting; live-preview + source-mode styling of chunks (LayoutJob + decorations); themes |
 | **editor** | `crates/editor` | The egui editor widget: chunk layout cache, virtualized painting, caret/selection, keyboard, mouse, IME, clipboard, decorations painting, images, commands |
-| **app** | `apps/mdedit` | Application shell: menus, tabs, file dialogs, sidebar (file tree + outline), find/replace bar, preferences, status bar, export, autosave/recovery, CLI args, dark mode |
+| **app** | `apps/mdedit` | Application shell: menus, tabs, file dialogs, outline sidebar, find/replace bar, preferences, status bar, export, autosave/recovery, CLI args, dark mode |
 | **peer session** (`markdown-editor-a5`) | `packaging/`, `scripts/`, `tests/corpus/`, `benches/` docs | `.desktop`, icon, AppStream, install script, `.deb` via cargo-deb, test corpus, benchmark script |
 | **integrator** (main session) | root `Cargo.toml`, `docs/` | Integration, final testing, fixes |
 

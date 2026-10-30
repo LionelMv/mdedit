@@ -1,6 +1,6 @@
 # Issues to implement later
 
-Known gaps and follow-ups, newest first. Remove an entry when it is done.
+Known gaps and follow-ups. Remove an entry when it is done.
 
 ## 1. Pasting and dropping images is not implemented
 
@@ -25,17 +25,7 @@ document.
 **Alternative.** If image pasting is not wanted, remove the setting from Preferences and
 `Config` instead.
 
-## 2. Design docs still describe the folder sidebar and folder search
-
-**Problem.** The Files and Search sidebar panels, Open Folder, and folder command-line
-arguments were removed; the sidebar is now outline-only. These docs still describe the old
-design: [architecture.md](architecture.md), [feature-parity.md](feature-parity.md),
-[implementation-plan.md](implementation-plan.md), [team.md](team.md).
-
-**To do.** Update or strike the folder-tree and folder-search parts so the docs match the app.
-[user-guide.md](user-guide.md) and the top-level `README.md` are already up to date.
-
-## 3. Small buttons still have a shaded background
+## 2. Small buttons still have a shaded background
 
 **Problem.** The ✕ close buttons are now plain (no shaded square), but the other small
 buttons still show one: **«** (hide outline), **»** (show outline) and **+** (new tab).
@@ -43,9 +33,9 @@ buttons still show one: **«** (hide outline), **»** (show outline) and **+** (
 **To do.** Decide whether these should match the ✕ buttons. If so, draw them with
 `egui::Button::new(…).small().frame(false)` like the close buttons in `apps/mdedit/src/app.rs`.
 
-## 4. Change name of the Editor (caps?)
+## 3. Change name of the Editor (caps?)
 
-## 5. Long table cells don't wrap
+## 4. Long table cells don't wrap
 
 **Problem.** In live preview, table columns are lined up by adding space before each cell
 (`align_table` in `crates/editor/src/lib.rs`), and table rows never wrap: a wrapped row would
@@ -56,7 +46,7 @@ sentence in a cell) runs past the right edge and is cut off by the window.
 fits the window), with caret movement and hit-testing mapped back to the source text. Simpler
 stopgap: let wide tables scroll horizontally.
 
-## 6. Files opened from outside don't bring the window to the front on Wayland
+## 5. Files opened from outside don't bring the window to the front on Wayland
 
 **Problem.** A file sent to the running window opens as a new tab, but the window stays in the
 background and its dock icon blinks. winit's `focus_window` does nothing on Wayland, and

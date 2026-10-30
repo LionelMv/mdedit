@@ -30,7 +30,7 @@ StartupWMClass=mdedit
 | `.deb` | `cargo-deb` | `[package.metadata.deb]` with assets (binary, desktop, icons, metainfo). |
 | `.rpm` | `cargo-generate-rpm` | Same asset list. |
 | AppImage | `linuxdeploy` or `cargo-appimage` | Build on the oldest supported distro (glibc baseline). |
-| Flatpak | `flatpak-builder` + `flatpak-cargo-generator.py` for offline crates | Runtime `org.freedesktop.Platform`; permissions: `--socket=wayland --socket=fallback-x11 --device=dri --share=ipc`; file access through portals (`rfd`), plus `--filesystem=home` optional for the folder sidebar. |
+| Flatpak | `flatpak-builder` + `flatpak-cargo-generator.py` for offline crates | Runtime `org.freedesktop.Platform`; permissions: `--socket=wayland --socket=fallback-x11 --device=dri --share=ipc`; file access through portals (`rfd`). |
 | Arch | PKGBUILD in AUR | `cargo build --release --locked`. |
 
 ## Runtime checks

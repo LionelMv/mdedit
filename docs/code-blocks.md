@@ -33,12 +33,12 @@ renderer reads straight from the rope.
 
 | ID | Rule |
 |----|------|
-| CB-20 | The whole block draws as one **card**: background colour from theme, 1px border, rounded corners, padding (12 px h / 8 px v), full content width. |
+| CB-20 | The whole block draws as one **card**: background colour from theme, 1px border, rounded corners, padding (16 px h / 10 px v), full content width (a block in a list or quote starts at the surrounding text). |
 | CB-21 | Font: the system `monospace` family from fontconfig (fallback chain: user setting → `monospace` → `DejaVu Sans Mono` → `Liberation Mono` → bundled font). Size = body size × 0.9 by default, configurable. |
 | CB-22 | Tabs render to the next tab stop (default width 4, setting `code.tab_width`), computed in columns of the monospace font. Optional visible-whitespace mode. |
-| CB-23 | Long lines: default **no wrap + horizontal scroll inside the card** (code shape is meaning). Setting `code.wrap = true` soft-wraps with a hanging indicator. Never wrap in the middle of the file's own layout. |
+| CB-23 | Long lines **soft-wrap inside the card**, so all the code is visible without scrolling sideways. Wrapping is display only: the file's lines and what Copy copies are unchanged. |
 | CB-24 | Syntax highlighting with `syntect` by `lang`. Highlight state is cached per line so an edit re-highlights from the edited line until the parser state matches the cached state again. Large blocks (> 5 000 lines) highlight off-thread, viewport first. |
-| CB-25 | Header row (on hover or when focused): language label (click → language selector with search, like MarkText's `codeBlockLanguageSelector`), copy button, optional line numbers toggle. |
+| CB-25 | Header row, always visible: `</>` and language label on the left ("text" when there is none), copy icon on the right. Not built yet: click the label for a language selector (like MarkText's `codeBlockLanguageSelector`), line numbers toggle. |
 | CB-26 | Spell-check, grammar check and auto-correct are **off** inside code blocks and inline code. |
 | CB-27 | Live-preview: when the caret is outside the block, fences are hidden and only the card shows; when the caret is inside, the opening and closing fence lines become visible (dimmed), editable as text. |
 | CB-28 | Special languages render a preview *below* the code (code stays editable): `mermaid` (if `mmdc` available), `math`/`latex`/`tex` blocks via the math renderer, `diff` gets +/- line backgrounds. Preview failure shows the error inline, never blocks typing. |
@@ -67,7 +67,7 @@ renderer reads straight from the rope.
 | CB-60 | **Save** writes the rope; there is no Markdown "export" step, so the fence character, length, info string, tabs and trailing whitespace are untouched. |
 | CB-61 | When mdedit *generates* a fence (new block, paste from HTML), the fence is longer than the longest run of the same character in the content, minimum 3. |
 | CB-62 | HTML export: `<pre><code class="language-{lang}">` with HTML-escaped content, plus syntect classed spans and a theme CSS block. |
-| CB-63 | PDF export: monospace, highlighted, rules CB-23 (wrap in print by default since paper can't scroll) and CB-29. |
+| CB-63 | PDF export: monospace, highlighted, rules CB-23 and CB-29. |
 
 ## 5. Test plan for code
 

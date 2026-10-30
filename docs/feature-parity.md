@@ -43,8 +43,8 @@ Source: MarkText README and `packages/muya/src` (block types and UI widgets),
 
 | Feature | MarkText | mdedit | M# |
 |---|---|---|---|
-| Tabs, multiple windows | desktop `windows` | Tabs (windows later) | M6 |
-| File tree sidebar, folder search | renderer sidebar | ✓ | M6 |
+| Tabs, multiple windows | desktop `windows` | Tabs; separate windows by preference | M6 |
+| File tree sidebar, folder search | renderer sidebar | Removed on purpose (outline only) | — |
 | Outline / TOC | ✓ | ✓ | M6 |
 | Recent documents | `menu/recentDocuments.ts` | ✓ | M6 |
 | Themes (Cadmium Light, Material Dark, …) | ✓ | Own palettes + user TOML | M7 |
@@ -54,7 +54,7 @@ Source: MarkText README and `packages/muya/src` (block types and UI widgets),
 | Export HTML / PDF | ✓ | ✓ | M8 |
 | Paste images from clipboard | ✓ | arboard | M5 |
 | i18n | `i18n`, `locales` | `fluent` later | post-1.0 |
-| CLI open | `main/cli` | ✓ + D-Bus single instance | M6 |
+| CLI open | `main/cli` | ✓ + single instance (Unix socket) | M6 |
 
 ## Explicitly better than MarkText (goals)
 

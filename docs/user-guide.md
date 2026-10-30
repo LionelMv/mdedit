@@ -9,6 +9,11 @@ saved exactly as they were.
 - **Open:** File → Open… (Ctrl+O), File → Open Recent, or drag files onto the window. From a
   terminal: `mdedit notes.md todo.md`. A path that doesn't exist yet opens an empty document
   that will be saved there.
+- **Files opened from outside** (file manager, terminal) open as new tabs in the running window.
+  You can turn this off in [Preferences](#preferences). On Wayland the window may stay in the
+  background with its dock icon blinking; click the icon to go to it.
+- **Reopening:** the files you had open last time come back when you start mdedit, with the same
+  tab active. This can also be turned off in Preferences.
 - **New document:** File → New (Ctrl+N), or the **+** button after the last tab.
 - **Save:** Ctrl+S. **Save As:** Ctrl+Shift+S.
 - **Export:** File → Export HTML… writes a standalone `.html` file. File → Copy as HTML puts
@@ -21,7 +26,7 @@ saved exactly as they were.
 Each open document has a tab. The tab title ends with a dot (•) when there are unsaved
 changes. Hover over a tab to see its full path.
 
-- Switch tabs: click them, or Ctrl+Tab / Ctrl+Shift+Tab.
+- Switch tabs: click them, or Ctrl+Tab / Ctrl+Shift+Tab. Each tab keeps its scroll position.
 - Close a tab: the **✕** on the tab, Ctrl+W, or middle-click the tab. If it has unsaved
   changes, mdedit asks whether to save first.
 
@@ -39,8 +44,8 @@ mdedit remembers whether the outline was shown or hidden.
 
 ## Live preview and Source mode
 
-- **Live** (the default) shows the document formatted. The Markdown symbols (`**`, `#`, …)
-  appear only on the line you are editing, so you can still change them.
+- **Live** (the default) shows the document formatted. The Markdown symbols (`**`, `#`, `-`, `>`,
+  …) appear only on the block you are editing, so you can still change them.
 - **Source** shows the plain Markdown text with syntax colouring.
 
 Switch with Ctrl+E, View → Source Mode, or by clicking **Live** / **Source** in the status bar.
@@ -76,7 +81,11 @@ Some things happen as you type:
 
 Code blocks are shown as cards with syntax highlighting. A header row shows `</>` and the
 language ("text" when the block has none) on the left, and a copy button on the right that
-copies just the code.
+copies just the code. Inside a list or quote, the card lines up with the surrounding text.
+
+Lists and quotes are indented by how deeply they are nested, and long lines wrap under their
+text. Table columns line up automatically and you don't need to pad the Markdown with spaces.
+Table rows don't wrap: a table wider than the window is cut off at the right edge.
 
 ## Links and images
 

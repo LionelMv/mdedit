@@ -66,7 +66,7 @@ recovery, and correct handling of anything we don't render yet (it just shows as
 | Mermaid | Optional: call `mmdc` (mermaid-cli) if installed, cache SVG | Fallback: show code. No mature pure-Rust Mermaid renderer yet; re-check later. |
 | File dialogs | `rfd` (xdg-desktop-portal) | Works in Flatpak. |
 | Clipboard | egui/winit built-in clipboard for text; `arboard` (`wayland-data-control`) for images/HTML | arboard's Wayland path fails on GNOME and falls back to X11 (see §5.0). |
-| File watching | `notify` | Detect external changes, sidebar tree refresh. |
+| File watching | `notify` | Detect external changes to open files. |
 | Spell check | `spellbook` (Hunspell-compatible, pure Rust) using `/usr/share/hunspell/*.dic` | Skips code, URLs, math. |
 | Config & paths | `serde` + `toml`, `directories` (XDG) | `~/.config/mdedit/config.toml`, `~/.local/state/mdedit/` for recovery. |
 | HTML export | `pulldown-cmark::html` + `syntect` classed CSS | Self-contained HTML with inline CSS/images. |
@@ -90,10 +90,10 @@ mdedit/
 │   ├── layout/               # Block → laid-out lines; TextLayout trait; caches
 │   ├── render/               # paint blocks; images, math, diagrams, tables
 │   ├── editor/               # the editor widget: input, IME, hit-testing, commands
-│   ├── workspace/            # tabs, file tree, recent files, watcher, autosave/recovery
+│   ├── workspace/            # config, recent files, session, watcher, autosave/recovery
 │   ├── export/               # HTML, PDF
 │   ├── spell/                # spellbook integration
-│   └── ui/                   # app shell: sidebar, toolbar, menus, prefs, themes, dialogs
+│   └── ui/                   # app shell: tabs, outline sidebar, menus, prefs, themes, dialogs
 └── docs/
 ```
 
