@@ -49,6 +49,7 @@ const OVERSCAN: f32 = 300.0;
 const CARD_PAD_V: f32 = 10.0;
 /// Horizontal padding of code cards (CB-20).
 const CARD_PAD_H: f32 = 16.0;
+static NEXT_SCROLL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Corner radius of code cards.
 const CARD_RADIUS: f32 = 12.0;
 /// Max height of an inline image preview.
@@ -95,6 +96,9 @@ pub struct EditorState {
     counts_dirty: bool,
     image_guard: std::cell::RefCell<images::ImageGuard>,
     stats: FrameStats,
+    /// Identifies this editor's scroll area: egui keeps a scroll area's state (including the
+    /// content size it clamps to) by id, so each tab needs its own.
+    scroll_id: u64,
     /// Font atlas fill ratio and text options after the last `show`: a lower ratio or other
     /// options mean egui rebuilt the atlas.
     atlas_fill: f32,
@@ -285,6 +289,7 @@ impl EditorState {
             counts_dirty: false,
             image_guard: Default::default(),
             stats: FrameStats::default(),
+            scroll_id: NEXT_SCROLL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             atlas_fill: 0.0,
             text_options: None,
         }
@@ -347,7 +352,7 @@ impl EditorState {
         self.resolve_scroll(&env, doc);
         let offset = self.anchor_offset();
         let scroll = egui::ScrollArea::vertical()
-            .id_salt(id.with("scroll"))
+            .id_salt(id.with("scroll").with(self.scroll_id))
             .auto_shrink([false, false])
             .scroll_source(egui::containers::scroll_area::ScrollSource {
                 drag: egui::containers::scroll_area::DragScroll::Never,

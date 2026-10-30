@@ -82,3 +82,46 @@ impl egui::DroppedFile for Dropped {
         std::fs::read(&self.0).map_err(|e| e.to_string())
     }
 }
+
+/// Scrolling a tab, visiting a shorter tab and coming back must leave the view where it was
+/// (tabs used to share a scroll area, which clamped to the other document's length).
+#[test]
+#[ignore]
+fn tab_switch_keeps_scroll_position() {
+    assert!(std::env::var_os(mdedit_workspace::HOME_ENV).is_some(), "set MDEDIT_HOME to a scratch dir");
+    let tmp = tempfile::tempdir().unwrap();
+    let doc = |name: &str, n: usize| {
+        let body: String = (0..n).map(|i| format!("## Section {name}{i}\n\nSome text for section {i}.\n\n")).collect();
+        let p = tmp.path().join(format!("{name}.md"));
+        std::fs::write(&p, body).unwrap();
+        p
+    };
+    let targets = StartupTargets { files: vec![doc("aaa", 60), doc("bbb", 20)] };
+    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 750.0)).build_eframe(|cc| MdApp::new(cc, targets));
+    h.run_steps(3);
+    h.get_by_label("aaa.md").click();
+    h.run_steps(3);
+    h.hover_at(egui::pos2(700.0, 400.0));
+    h.run_steps(2);
+    for _ in 0..40 {
+        h.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -60.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(1);
+    }
+    h.run_steps(40);
+    let first = h.render().expect("render");
+    h.get_by_label("bbb.md").click();
+    h.run_steps(5);
+    h.get_by_label("aaa.md").click();
+    h.run_steps(40);
+    h.hover_at(egui::pos2(700.0, 400.0));
+    h.run_steps(5);
+    let last = h.render().expect("render");
+    let differing = first.pixels().zip(last.pixels()).filter(|(a, b)| a.0.iter().zip(b.0).any(|(x, y)| x.abs_diff(y) > 25)).count();
+    assert!(differing < 500, "{differing} pixels differ after switching tabs and back");
+}

@@ -760,3 +760,36 @@ fn second_list_in_quote_and_quote_in_list_are_indented() {
     let (item, quoted) = (x(&mut h, "Item"), x(&mut h, "quoted"));
     assert!(quoted > item + 10.0, "quote text right of its bar: {item} {quoted}");
 }
+
+#[test]
+fn switching_tabs_keeps_scroll_position() {
+    let long: String = (0..400).map(|i| format!("line {i}\n\n")).collect();
+    let mut h = H::new(&long);
+    h.step = 1.0 / 60.0;
+    h.frame(vec![Event::PointerMoved(pos2(400.0, 300.0))]);
+    for _ in 0..40 {
+        h.frame(vec![Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -200.0), modifiers: Modifiers::NONE, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Unknown }]);
+    }
+    for _ in 0..30 {
+        h.frame(vec![]);
+    }
+    let before = h.ed.anchor_offset();
+    assert!(before > 1000.0, "scrolled: {before}");
+    // Another tab with a shorter document that can scroll too, shown in the same place.
+    let mut other_doc = Document::new();
+    let short: String = (0..60).map(|i| format!("line {i}\n\n")).collect();
+    other_doc.buffer = Buffer::new(&short);
+    let mut other_ed = EditorState::new();
+    std::mem::swap(&mut h.ed, &mut other_ed);
+    std::mem::swap(&mut h.doc, &mut other_doc);
+    for _ in 0..5 {
+        h.frame(vec![]);
+    }
+    std::mem::swap(&mut h.ed, &mut other_ed);
+    std::mem::swap(&mut h.doc, &mut other_doc);
+    for _ in 0..5 {
+        h.frame(vec![]);
+    }
+    let after = h.ed.anchor_offset();
+    assert!((before - after).abs() < 2.0, "scroll kept: {before} -> {after}");
+}
