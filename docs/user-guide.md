@@ -128,6 +128,7 @@ File → Preferences… (Ctrl+,). Changes apply immediately.
 | Max text width | How wide the text column can get, or "Full width" to use the whole window. |
 | Recovery snapshot every | How often unsaved changes are backed up (see below). 0 turns it off. |
 | Remote images | Load images from the web (off by default). |
+| Opening files | "Open in the existing window" (on by default): files opened from the file manager or a terminal become new tabs in the running window. Turn it off to give each its own window. Applies from the next file you open. On Wayland the window may stay in the background with its dock icon blinking. |
 | New documents | Start new documents in Source mode. |
 
 **Reset to defaults** restores every setting except whether the outline is shown.

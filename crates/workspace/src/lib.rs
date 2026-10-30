@@ -65,6 +65,14 @@ fn no_dir() -> io::Error {
     io::Error::new(io::ErrorKind::NotFound, "no home directory for mdedit configuration")
 }
 
+/// Socket a running window listens on for files to open (private to this user).
+pub fn socket_path() -> Option<PathBuf> {
+    match home_override() {
+        Some(h) => Some(h.join("mdedit.sock")),
+        None => project_dirs().and_then(|d| d.runtime_dir().map(Path::to_path_buf)).or_else(state_dir).map(|d| d.join("mdedit.sock")),
+    }
+}
+
 /// Path of the config file.
 pub fn config_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("config.toml"))
@@ -114,6 +122,8 @@ pub struct Config {
     /// Load `http(s)` images in the editor (privacy: off by default).
     pub remote_images: bool,
     pub show_sidebar: bool,
+    /// Open files in the running window (as new tabs) instead of a new window.
+    pub single_window: bool,
 }
 
 impl Default for Config {
@@ -129,6 +139,7 @@ impl Default for Config {
             image_folder: "assets".into(),
             remote_images: false,
             show_sidebar: true,
+            single_window: true,
         }
     }
 }

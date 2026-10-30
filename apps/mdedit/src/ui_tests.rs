@@ -70,6 +70,34 @@ fn outline_shows_for_file_opened_into_empty_tab() {
     h.get_by_label("Second heading");
 }
 
+/// A later `mdedit` start sends its file over the socket: it opens as a tab in this window.
+#[test]
+#[ignore]
+fn file_from_a_later_start_opens_as_a_tab() {
+    assert!(std::env::var_os(mdedit_workspace::HOME_ENV).is_some(), "set MDEDIT_HOME to a scratch dir");
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("later.md");
+    std::fs::write(&file, "# Later heading\n").unwrap();
+    let sock = dir.path().join("s.sock");
+    let crate::single::Claim::First(listener) = crate::single::claim(&sock, &[]).unwrap() else { panic!("first start") };
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| {
+        let app = MdApp::new(cc, StartupTargets::default());
+        app.listen(listener);
+        app
+    });
+    h.run_steps(2);
+    assert!(matches!(crate::single::claim(&sock, std::slice::from_ref(&file)).unwrap(), crate::single::Claim::Forwarded));
+    for _ in 0..50 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run_steps(1);
+        if h.query_by_label("later.md").is_some() {
+            break;
+        }
+    }
+    h.get_by_label("later.md");
+    h.get_by_label("Later heading");
+}
+
 /// A file dropped on the window (dropping goes through the same open path as File → Open).
 #[derive(Debug)]
 struct Dropped(std::path::PathBuf);

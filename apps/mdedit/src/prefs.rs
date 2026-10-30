@@ -61,6 +61,10 @@ pub fn preferences_window(ctx: &egui::Context, open: &mut bool, cfg: &mut Config
             ui.checkbox(&mut cfg.remote_images, "Load http(s) images").on_hover_text("Off by default for privacy: loading reveals your IP to the image host.");
             ui.end_row();
 
+            ui.label("Opening files");
+            ui.checkbox(&mut cfg.single_window, "Open in the existing window").on_hover_text("Files opened from the file manager or terminal become new tabs. Off: each opens its own window.");
+            ui.end_row();
+
             ui.label("New documents");
             ui.checkbox(&mut cfg.source_mode, "Start in source mode");
             ui.end_row();

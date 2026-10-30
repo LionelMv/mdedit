@@ -13,7 +13,8 @@ USAGE:
 
 ARGS:
     FILE    Markdown file to open in a tab. A path that does not exist yet opens
-            an empty document that will be saved there.
+            an empty document that will be saved there. Files open as tabs in a
+            running mdedit window, unless turned off in Preferences.
 
 OPTIONS:
     -h, --help       Print this help and exit

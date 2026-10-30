@@ -26,6 +26,8 @@ use crate::toast::Toasts;
 /// Results from background threads (file dialogs, parses).
 pub enum BgMsg {
     OpenFiles(Vec<PathBuf>),
+    /// Another `mdedit` start handed us these paths (none: it was started without files).
+    OpenFromOutside(Vec<PathBuf>),
     SaveAs { tab_id: u64, path: PathBuf, then_close: bool },
     SaveAsCancelled { then_close: bool },
     ExportDone(Result<PathBuf, String>),
@@ -130,15 +132,7 @@ impl MdApp {
         };
 
         for f in &targets.files {
-            if f.exists() {
-                app.open_path(f);
-            } else {
-                // New document that will be saved at this path.
-                let mut doc = Document::new();
-                doc.path = Some(f.clone());
-                let idx = app.push_tab(doc);
-                app.active = idx;
-            }
+            app.open_target(f);
         }
         if app.tabs.is_empty() {
             app.new_tab();
@@ -182,6 +176,28 @@ impl MdApp {
 
     fn find_tab_by_path(&self, path: &Path) -> Option<usize> {
         self.tabs.iter().position(|t| t.doc.path.as_deref().is_some_and(|p| same_file(p, path)))
+    }
+
+    /// Forward files sent by later `mdedit` starts to the UI thread.
+    pub fn listen(&self, listener: std::os::unix::net::UnixListener) {
+        let (tx, ctx) = (self.tx.clone(), self.ctx.clone());
+        crate::single::listen(listener, move |paths| {
+            let _ = tx.send(BgMsg::OpenFromOutside(paths));
+            ctx.request_repaint();
+        });
+    }
+
+    /// Open a path given on the command line; one that doesn't exist yet is a new document
+    /// that will be saved there.
+    fn open_target(&mut self, f: &Path) {
+        if f.exists() {
+            self.open_path(f);
+        } else {
+            let mut doc = Document::new();
+            doc.path = Some(f.to_path_buf());
+            let idx = self.push_tab(doc);
+            self.activate(idx);
+        }
     }
 
     /// Open a file (or switch to its tab).
@@ -453,6 +469,16 @@ impl MdApp {
                     for p in paths {
                         self.open_path(&p);
                     }
+                }
+                BgMsg::OpenFromOutside(paths) => {
+                    for p in &paths {
+                        self.open_target(p);
+                    }
+                    if paths.is_empty() && !self.tabs.get(self.active).is_some_and(Tab::is_pristine) {
+                        self.new_tab();
+                    }
+                    ctx.send_viewport_cmd(ViewportCommand::Focus);
+                    ctx.send_viewport_cmd(ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
                 }
                 BgMsg::SaveAs { tab_id, path, then_close } => {
                     self.dialog_busy = false;

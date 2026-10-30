@@ -9,6 +9,7 @@ mod links;
 mod menu;
 mod prefs;
 mod sidebar;
+mod single;
 mod tabs;
 mod theme;
 mod toast;
@@ -36,6 +37,18 @@ fn main() -> std::process::ExitCode {
     };
     let targets = cli::classify(&paths);
 
+    // Open in the running window if there is one (a failure here just means a new window).
+    let mut listener = None;
+    let socket = mdedit_workspace::Config::load().single_window.then(mdedit_workspace::socket_path).flatten();
+    if let Some(sock) = &socket {
+        match single::claim(sock, &targets.files) {
+            Ok(single::Claim::Forwarded) => return std::process::ExitCode::SUCCESS,
+            Ok(single::Claim::First(l)) => listener = Some(l),
+            Err(e) => log::warn!("{}: {e}", sock.display()),
+        }
+    }
+    let owns_socket = listener.is_some();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_app_id("io.github.mdedit.mdedit")
@@ -46,7 +59,16 @@ fn main() -> std::process::ExitCode {
         persist_window: false,
         ..Default::default()
     };
-    let res = eframe::run_native("mdedit", options, Box::new(move |cc| Ok(Box::new(app::MdApp::new(cc, targets)))));
+    let res = eframe::run_native("mdedit", options, Box::new(move |cc| {
+        let app = app::MdApp::new(cc, targets);
+        if let Some(l) = listener {
+            app.listen(l);
+        }
+        Ok(Box::new(app))
+    }));
+    if owns_socket && let Some(sock) = &socket {
+        let _ = std::fs::remove_file(sock);
+    }
     match res {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
