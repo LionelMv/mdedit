@@ -547,7 +547,7 @@ impl Ctx<'_> {
                 let mut ls = line_start(self.text, b.range.start);
                 while ls < b.range.end.min(self.text.len()) {
                     let le = self.text[ls..].find('\n').map_or(self.text.len(), |p| ls + p);
-                    let ws = self.text[ls..le].len() - self.text[ls..le].trim_start_matches([' ', '\t']).len();
+                    let ws = self.text[ls..le].len() - self.text[ls..le].trim_start_matches([' ', '\t', '>']).len();
                     if ws > 0 && ws < le - ls {
                         self.vis(&(ls..ls + ws), Vis::Marker);
                     }
@@ -652,7 +652,11 @@ impl Ctx<'_> {
                         e += 1;
                     }
                     if n == depth {
-                        self.vis(&(i..e), Vis::Ghost);
+                        // The editor indents the quote, so the marker takes no room; on an
+                        // otherwise empty line it keeps its size so the blank row stays.
+                        let le = bytes[e..end].iter().position(|&b| b == b'\n').map_or(end, |p| e + p);
+                        let blank = bytes[e..le].iter().all(|b| matches!(b, b' ' | b'\t' | b'>' | b'\r'));
+                        self.vis(&(i..e), if blank { Vis::Ghost } else { Vis::Marker });
                         break;
                     }
                     i = e;
@@ -807,6 +811,8 @@ impl Ctx<'_> {
             if ind < l.start {
                 self.vis(&(ind..l.start), Vis::Marker);
             }
+            // The code's own indentation stays, even though a list hides its lines' indentation.
+            self.vis(l, Vis::Normal);
             prev_end = prev_end.max(l.end);
         }
         if !lang.is_empty() && !lines.is_empty() {

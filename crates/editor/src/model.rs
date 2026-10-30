@@ -88,8 +88,8 @@ pub(crate) fn split_nested_code(text: &str, blocks: &[Block], chunks: Vec<DChunk
             cuts.push(line_start(text, r.start));
             cuts.push(after_code(text, r.end));
         }
-        if let Some(b) = top.filter(|b| matches!(b.kind, BlockKind::List { .. })) {
-            list_item_starts(b, &mut |at| cuts.push(line_start(text, at)));
+        if let Some(b) = top.filter(|b| matches!(b.kind, BlockKind::List { .. } | BlockKind::BlockQuote)) {
+            nested_starts(text, b, &mut cuts);
         }
         cuts.retain(|&p| p > c.range.start && p < c.range.end);
         cuts.sort_unstable();
@@ -116,30 +116,42 @@ pub(crate) fn is_nested_code(text: &str, blocks: &[Block], c: &DChunk) -> bool {
 }
 
 /// Nesting of the containers around line start `at` inside top-level block `b`: (list depth,
-/// quote depth). List depth counts the list items `at` is in.
-pub(crate) fn container_depth(text: &str, b: &Block, at: usize) -> (u8, u8) {
-    let (mut lists, mut quotes) = (0u8, 0u8);
+/// quote depth, list depth outside the first quote). List depth counts the list items `at` is in.
+pub(crate) fn container_depth(text: &str, b: &Block, at: usize) -> (u8, u8, u8) {
+    let (mut lists, mut quotes, mut outer) = (0u8, 0u8, 0u8);
     let mut cur = b;
     loop {
         match cur.kind {
-            BlockKind::ListItem { .. } => lists = lists.saturating_add(1),
+            BlockKind::ListItem { .. } => {
+                lists = lists.saturating_add(1);
+                if quotes == 0 {
+                    outer = lists;
+                }
+            }
             BlockKind::BlockQuote => quotes = quotes.saturating_add(1),
             _ => {}
         }
         // Children start after their line's indentation / `> `: compare from the line start.
-        match cur.children.iter().find(|c| line_start(text, c.range.start) <= at && at <= c.range.end) {
+        // Last match: a child's range can run up to the next sibling's line.
+        match cur.children.iter().rev().find(|c| line_start(text, c.range.start) <= at && at <= c.range.end) {
             Some(n) => cur = n,
-            None => return (lists, quotes),
+            None => return (lists, quotes, outer),
         }
     }
 }
 
-fn list_item_starts(b: &Block, f: &mut impl FnMut(usize)) {
+/// Chunk cuts for the list items and quotes nested in `b`: each is indented by its own depth.
+fn nested_starts(text: &str, b: &Block, cuts: &mut Vec<usize>) {
     for c in &b.children {
-        if matches!(c.kind, BlockKind::ListItem { .. }) {
-            f(c.range.start);
+        match c.kind {
+            BlockKind::ListItem { .. } => cuts.push(line_start(text, c.range.start)),
+            BlockKind::BlockQuote => {
+                cuts.push(line_start(text, c.range.start));
+                cuts.push(after_code(text, c.range.end));
+            }
+            _ => {}
         }
-        list_item_starts(c, f);
+        nested_starts(text, c, cuts);
     }
 }
 

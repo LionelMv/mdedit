@@ -161,6 +161,8 @@ struct Laid {
     header_h: f32,
     /// Left offset of a code card nested in a list item or quote (from the text column).
     card_x: f32,
+    /// Left offset of the outermost quote bar (a quote nested in a list item).
+    quote_x: f32,
 }
 
 /// Scroll position relative to a chunk: the viewport top is `dy` below the top of the chunk
@@ -558,16 +560,16 @@ impl EditorState {
         let (pad_h, pad_v) = if card { (CARD_PAD_H, CARD_PAD_V) } else { (0.0, 0.0) };
         // Lists (live preview): each item is indented by its depth, the bullet / number sits in
         // the indent. A nested code card lines up with its item's text, or inside the quote.
-        let (lists, quotes) = match c.block.and_then(|b| self.model.blocks.get(b)) {
+        let (lists, quotes, outer_lists) = match c.block.and_then(|b| self.model.blocks.get(b)) {
             Some(b) if self.mode == Mode::LivePreview && matches!(b.kind, mdedit_syntax::BlockKind::List { .. } | mdedit_syntax::BlockKind::BlockQuote) => {
                 model::container_depth(text, b, c.range.start)
             }
-            _ => (0, 0),
+            _ => (0, 0, 0),
         };
         let body = env.theme.body_size;
-        let list_x = if lists > 0 { body * (LIST_INDENT + LIST_STEP * f32::from(lists - 1)) } else { 0.0 };
-        let card_x = if nested_code { list_x + f32::from(quotes) * QUOTE_STEP } else { 0.0 };
-        let extra = if nested_code { card_x } else { list_x };
+        let list_x = |n: u8| if n > 0 { body * (LIST_INDENT + LIST_STEP * f32::from(n - 1)) } else { 0.0 };
+        let extra = list_x(lists) + f32::from(quotes) * QUOTE_STEP;
+        let card_x = if nested_code { extra } else { 0.0 };
         let styled = mdedit_style::style_chunk(&mdedit_style::StyleInput {
             text,
             blocks: &self.model.blocks,
@@ -600,10 +602,14 @@ impl EditorState {
         }
         let mut galley = env.ctx.fonts_mut(|f| f.layout_job(job.clone()));
         self.stats.layouts += 1;
+        let is_table = table.is_some();
         if let Some((rows, aligns)) = table
             && let Some(aligned) = align_table(&galley, &job, &rows, &aligns)
         {
             galley = env.ctx.fonts_mut(|f| f.layout_job(aligned));
+        }
+        if focused && extra > 0.0 && !nested_code && !is_table && let Some(hung) = hang_prefixes(&galley, &job) {
+            galley = env.ctx.fonts_mut(|f| f.layout_job(hung));
         }
         let fin = |v: f32| if v.is_finite() { v.clamp(0.0, 1000.0) } else { 0.0 };
         let has_header = decorations.iter().any(|d| matches!(d, Decoration::CodeHeader { .. }));
@@ -617,6 +623,7 @@ impl EditorState {
             indent,
             header_h,
             card_x: card_x.min(self.col_w * 0.6),
+            quote_x: list_x(outer_lists),
         });
         self.cache.insert(key, CacheEntry { laid: laid.clone(), used: self.frame });
         laid
@@ -884,7 +891,7 @@ impl EditorState {
                             // Cover the chunk's padding too, so the bar runs alongside a code
                             // card nested in the quote (its header and padding are space_before).
                             let (y0, y1) = (y0 - v.g.laid.space_before, y1 + v.g.laid.space_after);
-                            let x = col_l + f32::from(depth.saturating_sub(1)) * 14.0 + 2.0;
+                            let x = col_l + v.g.laid.quote_x + f32::from(depth.saturating_sub(1)) * QUOTE_STEP + 2.0;
                             ds.push(DecoGeom::Bar { rect: Rect::from_min_max(pos2(x, y0), pos2(x + 3.0, y1)), color: *color });
                         }
                     }
@@ -1820,19 +1827,60 @@ fn align_table(galley: &Galley, job: &LayoutJob, rows: &[Vec<Range<usize>>], ali
     }
     let mut job = job.clone();
     for (at, space) in inserts {
-        let at = egui::text::ByteIndex(at);
-        let Some(i) = job.sections.iter().position(|s| s.byte_range.start <= at && at < s.byte_range.end) else { continue };
-        if job.sections[i].byte_range.start == at {
-            job.sections[i].leading_space += space;
-        } else {
-            let mut tail = job.sections[i].clone();
-            tail.byte_range.start = at;
-            tail.leading_space = space;
-            job.sections[i].byte_range.end = at;
-            job.sections.insert(i + 1, tail);
-        }
+        add_leading_space(&mut job, at, space);
     }
     Some(job)
+}
+
+/// While a list item or quote is edited its markers are shown as text. Pull them left into the
+/// indent (negative leading space) so the text stays where it is. `None` if there are none.
+fn hang_prefixes(galley: &Galley, job: &LayoutJob) -> Option<LayoutJob> {
+    let text = &job.text;
+    let mut out: Option<LayoutJob> = None;
+    let mut ls = 0;
+    for line in text.split_inclusive('\n') {
+        let n = container_prefix_len(line);
+        if n > 0 && n < line.trim_end().len() {
+            let chars = text[..ls].chars().count();
+            let width = geom::caret_rect(galley, chars + line[..n].chars().count()).0.min.x - geom::caret_rect(galley, chars).0.min.x;
+            add_leading_space(out.get_or_insert_with(|| job.clone()), ls, -width);
+        }
+        ls += line.len();
+    }
+    out
+}
+
+/// Length of a line's indentation, `>` quote markers and list marker with its spaces.
+fn container_prefix_len(line: &str) -> usize {
+    let is_ws = |c: char| c == ' ' || c == '\t';
+    let prefix = line.len() - line.trim_start_matches(|c| is_ws(c) || c == '>').len();
+    let rest = &line[prefix..];
+    let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    let marker = match rest.as_bytes().get(digits) {
+        Some(b'.' | b')') if digits > 0 => digits + 1,
+        Some(b'-' | b'*' | b'+') if digits == 0 => 1,
+        _ => return prefix,
+    };
+    let after = &rest[marker..];
+    if !after.starts_with(is_ws) {
+        return prefix;
+    }
+    prefix + marker + after.len() - after.trim_start_matches(is_ws).len()
+}
+
+/// Add `space` before byte `at`, splitting the section that holds it if needed.
+fn add_leading_space(job: &mut LayoutJob, at: usize, space: f32) {
+    let at = egui::text::ByteIndex(at);
+    let Some(i) = job.sections.iter().position(|s| s.byte_range.start <= at && at < s.byte_range.end) else { return };
+    if job.sections[i].byte_range.start == at {
+        job.sections[i].leading_space += space;
+    } else {
+        let mut tail = job.sections[i].clone();
+        tail.byte_range.start = at;
+        tail.leading_space = space;
+        job.sections[i].byte_range.end = at;
+        job.sections.insert(i + 1, tail);
+    }
 }
 
 #[cfg(test)]

@@ -704,3 +704,59 @@ fn code_card_in_quote_is_right_of_the_bar() {
     let (Some(bar), Some(card)) = (bar, card) else { panic!("bar and card: {bar:?} {card:?}") };
     assert!(card.min.x > bar.max.x, "card {card:?} right of bar {bar:?}");
 }
+
+#[test]
+fn list_in_quote_is_indented_with_hanging_wrap() {
+    let long = "word ".repeat(60);
+    let text = format!("> Intro\n>\n> - {long}\n>   - nested\n\nend\n");
+    let mut h = H::new(&text);
+    h.set_caret(text.len());
+    h.frame(vec![]);
+    let intro = h.pos_of(2).x;
+    let start = text.find("word").unwrap();
+    let item = h.pos_of(start).x;
+    let nested = h.pos_of(text.find("nested").unwrap()).x;
+    assert!(item > intro + 10.0 && nested > item + 10.0, "{intro} {item} {nested}");
+    let first_y = h.pos_of(start).y;
+    let wrapped = (start..start + long.len()).step_by(5).find(|&b| h.pos_of(b).y > first_y + 5.0).expect("wraps");
+    assert!((h.pos_of(wrapped).x - item).abs() < 1.0, "wrapped row starts under the text");
+}
+
+#[test]
+fn editing_an_item_does_not_move_its_text() {
+    let text = "para\n\n- first\n  - nested item\n1. number\n\n> quoted\n";
+    for word in ["first", "nested", "number", "quoted"] {
+        let at = text.find(word).unwrap();
+        let mut h = H::new(text);
+        h.set_caret(0);
+        h.frame(vec![]);
+        let before = h.pos_of(at).x;
+        h.set_caret(at + 1);
+        h.frame(vec![]);
+        let after = h.pos_of(at).x;
+        assert!((before - after).abs() < 1.0, "{word}: {before} -> {after}");
+    }
+}
+
+#[test]
+fn code_in_list_keeps_its_own_indentation() {
+    let text = "- x\n\n  ```py\n  if a:\n      b\n  ```\n";
+    let mut h = H::new(text);
+    h.set_caret(0);
+    h.frame(vec![]);
+    let (a, b) = (h.pos_of(text.find("if a").unwrap()).x, h.pos_of(text.find("b\n").unwrap()).x);
+    assert!(b > a + 10.0, "{a} {b}");
+}
+
+#[test]
+fn second_list_in_quote_and_quote_in_list_are_indented() {
+    let text = "> Intro\n>\n> - a\n> 1. b\n\n- Item\n  > quoted\n\nend\n";
+    let mut h = H::new(text);
+    h.set_caret(text.len());
+    h.frame(vec![]);
+    let x = |h: &mut H, s: &str| h.pos_of(text.find(s).unwrap()).x;
+    let (intro, a, b) = (x(&mut h, "Intro"), x(&mut h, "a\n"), x(&mut h, "b\n"));
+    assert!((a - b).abs() < 1.0 && a > intro + 10.0, "{intro} {a} {b}");
+    let (item, quoted) = (x(&mut h, "Item"), x(&mut h, "quoted"));
+    assert!(quoted > item + 10.0, "quote text right of its bar: {item} {quoted}");
+}
