@@ -11,7 +11,7 @@ use mdedit_highlight::{HlTheme, Highlighter};
 use mdedit_style::Mode;
 use mdedit_syntax::Heading;
 use mdedit_workspace::recovery::{self, Snapshot};
-use mdedit_workspace::{Config, RecentFiles, Watcher};
+use mdedit_workspace::{Config, RecentFiles, Session, Watcher};
 
 use crate::cli::StartupTargets;
 use crate::dialogs::{self, RecoveryChoice, SaveChoice, TableDialog};
@@ -76,6 +76,9 @@ pub struct MdApp {
     typewriter: bool,
     focus_mode: bool,
     last_title: String,
+    /// Keep the session file up to date (see `StartupTargets::save_session`).
+    save_session: bool,
+    last_session: Option<Session>,
     last_zoom: f32,
     actions: Vec<Action>,
     ctx: egui::Context,
@@ -126,11 +129,16 @@ impl MdApp {
             typewriter: false,
             focus_mode: false,
             last_title: String::new(),
+            save_session: targets.save_session,
+            last_session: None,
             last_zoom: ctx.zoom_factor(),
             actions: Vec::new(),
             ctx: ctx.clone(),
         };
 
+        if let Some(session) = &targets.session {
+            app.restore_session(session);
+        }
         for f in &targets.files {
             app.open_target(f);
         }
@@ -176,6 +184,39 @@ impl MdApp {
 
     fn find_tab_by_path(&self, path: &Path) -> Option<usize> {
         self.tabs.iter().position(|t| t.doc.path.as_deref().is_some_and(|p| same_file(p, path)))
+    }
+
+    /// Reopen the last session's files. Restoring isn't "opening" them again, so the recent
+    /// files list keeps its order.
+    fn restore_session(&mut self, session: &Session) {
+        let recent = self.recent.clone();
+        for f in &session.files {
+            self.open_path(f);
+        }
+        self.recent = recent;
+        if let Err(e) = self.recent.save() {
+            log::warn!("cannot save recent files: {e}");
+        }
+        if let Some(idx) = session.active.as_deref().and_then(|p| self.find_tab_by_path(p)) {
+            self.activate(idx);
+        }
+    }
+
+    /// Save the open files when they change. Not while quitting: the tabs closed by the unsaved
+    /// changes dialogs are still part of the session.
+    fn update_session(&mut self) {
+        if !self.save_session || !self.config.restore_session || self.quitting {
+            return;
+        }
+        let files: Vec<PathBuf> = self.tabs.iter().filter_map(|t| t.doc.path.clone()).collect();
+        let active = self.tabs.get(self.active).and_then(|t| t.doc.path.clone());
+        let session = Session { files, active };
+        if self.last_session.as_ref() != Some(&session) {
+            if let Err(e) = session.save() {
+                log::warn!("cannot save session: {e}");
+            }
+            self.last_session = Some(session);
+        }
     }
 
     /// Forward files sent by later `mdedit` starts to the UI thread.
@@ -958,6 +999,7 @@ impl eframe::App for MdApp {
         }
 
         self.poll_watcher();
+        self.update_session();
 
         let mut actions = std::mem::take(&mut self.actions);
         if !self.modal_open() {

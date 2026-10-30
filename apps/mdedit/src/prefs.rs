@@ -65,6 +65,10 @@ pub fn preferences_window(ctx: &egui::Context, open: &mut bool, cfg: &mut Config
             ui.checkbox(&mut cfg.single_window, "Open in the existing window").on_hover_text("Files opened from the file manager or terminal become new tabs. Off: each opens its own window.");
             ui.end_row();
 
+            ui.label("Starting up");
+            ui.checkbox(&mut cfg.restore_session, "Reopen files from last time");
+            ui.end_row();
+
             ui.label("New documents");
             ui.checkbox(&mut cfg.source_mode, "Start in source mode");
             ui.end_row();

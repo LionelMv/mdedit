@@ -100,11 +100,15 @@ pub fn percent_decode(s: &str) -> Option<String> {
 pub struct StartupTargets {
     /// Files to open in tabs (may not exist yet).
     pub files: Vec<PathBuf>,
+    /// Files from the last session, opened before `files`.
+    pub session: Option<mdedit_workspace::Session>,
+    /// Keep the session file up to date with this window's tabs.
+    pub save_session: bool,
 }
 
 /// Make the CLI paths absolute.
 pub fn classify(paths: &[PathBuf]) -> StartupTargets {
-    StartupTargets { files: paths.iter().map(|p| absolutize(p)).collect() }
+    StartupTargets { files: paths.iter().map(|p| absolutize(p)).collect(), ..Default::default() }
 }
 
 /// Make `p` absolute against the current dir (without resolving symlinks or requiring it to exist).

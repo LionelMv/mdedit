@@ -24,7 +24,7 @@ fn theme_switch_keeps_text_readable() {
         || std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/architecture.md"),
         std::path::PathBuf::from,
     );
-    let targets = StartupTargets { files: vec![doc] };
+    let targets = StartupTargets { files: vec![doc], ..Default::default() };
     let mut h = Harness::builder().with_size(egui::vec2(1100.0, 750.0)).build_eframe(|cc| MdApp::new(cc, targets));
     let shot = |h: &mut Harness<'_, MdApp>, name: &str| {
         h.run_steps(6);
@@ -98,6 +98,44 @@ fn file_from_a_later_start_opens_as_a_tab() {
     h.get_by_label("Later heading");
 }
 
+/// The last session's files reopen with the same active tab, a file given at startup comes
+/// on top, and the session file follows the tabs.
+#[test]
+#[ignore]
+fn session_restores_and_follows_tabs() {
+    assert!(std::env::var_os(mdedit_workspace::HOME_ENV).is_some(), "set MDEDIT_HOME to a scratch dir");
+    let dir = tempfile::tempdir().unwrap();
+    let file = |n: &str| {
+        let p = dir.path().join(format!("{n}.md"));
+        std::fs::write(&p, format!("# Heading {n}\n")).unwrap();
+        p
+    };
+    let (a, b, c) = (file("one"), file("two"), file("three"));
+    let session = mdedit_workspace::Session { files: vec![a.clone(), b.clone(), dir.path().join("gone.md")], active: Some(a.clone()) };
+    let start = |files: Vec<std::path::PathBuf>, session: mdedit_workspace::Session| StartupTargets { files, session: Some(session), save_session: true };
+
+    let targets = start(vec![], session.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| MdApp::new(cc, targets));
+    h.run_steps(3);
+    h.get_by_label("one.md");
+    h.get_by_label("two.md");
+    assert!(h.query_by_label("gone.md").is_none() && h.query_by_label("Untitled").is_none());
+    h.get_by_label("Heading one"); // the saved active tab's outline
+    h.get_by_label("two.md").click();
+    h.run_steps(3);
+    let saved = mdedit_workspace::Session::load();
+    assert_eq!((saved.files, saved.active), (vec![a.clone(), b.clone()], Some(b.clone())));
+    drop(h);
+
+    // A file given at startup: restored tabs plus that one, active.
+    let targets = start(vec![c.clone()], session);
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| MdApp::new(cc, targets));
+    h.run_steps(3);
+    h.get_by_label("Heading three");
+    let saved = mdedit_workspace::Session::load();
+    assert_eq!((saved.files, saved.active), (vec![a, b, c.clone()], Some(c)));
+}
+
 /// A file dropped on the window (dropping goes through the same open path as File → Open).
 #[derive(Debug)]
 struct Dropped(std::path::PathBuf);
@@ -124,7 +162,7 @@ fn tab_switch_keeps_scroll_position() {
         std::fs::write(&p, body).unwrap();
         p
     };
-    let targets = StartupTargets { files: vec![doc("aaa", 60), doc("bbb", 20)] };
+    let targets = StartupTargets { files: vec![doc("aaa", 60), doc("bbb", 20)], ..Default::default() };
     let mut h = Harness::builder().with_size(egui::vec2(1100.0, 750.0)).build_eframe(|cc| MdApp::new(cc, targets));
     h.run_steps(3);
     h.get_by_label("aaa.md").click();

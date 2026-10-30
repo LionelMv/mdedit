@@ -65,6 +65,40 @@ fn no_dir() -> io::Error {
     io::Error::new(io::ErrorKind::NotFound, "no home directory for mdedit configuration")
 }
 
+/// The files open in the window, to reopen at the next start. Stored in the state dir.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Session {
+    /// In tab order.
+    pub files: Vec<PathBuf>,
+    /// The active tab's file.
+    pub active: Option<PathBuf>,
+}
+
+impl Session {
+    /// Load from the state dir; files that no longer exist are dropped.
+    pub fn load() -> Self {
+        session_path().map(|p| Self::load_from(&p)).unwrap_or_default()
+    }
+    /// Save to the state dir.
+    pub fn save(&self) -> io::Result<()> {
+        self.save_to(&session_path().ok_or_else(no_dir)?)
+    }
+    /// Load from an explicit file.
+    pub fn load_from(path: &Path) -> Self {
+        let mut s: Self = std::fs::read_to_string(path).ok().and_then(|t| toml::from_str(&t).ok()).unwrap_or_default();
+        s.files.retain(|f| f.is_file());
+        s
+    }
+    /// Save to an explicit file (atomic, mode 0600). Non-UTF-8 paths can't be stored in TOML.
+    pub fn save_to(&self, path: &Path) -> io::Result<()> {
+        let files = self.files.iter().filter(|p| p.to_str().is_some()).cloned().collect();
+        let active = self.active.clone().filter(|p| p.to_str().is_some());
+        let s = toml::to_string_pretty(&Self { files, active }).map_err(io::Error::other)?;
+        write_atomic(path, s.as_bytes(), Some(0o600))
+    }
+}
+
 /// Socket a running window listens on for files to open (private to this user).
 pub fn socket_path() -> Option<PathBuf> {
     match home_override() {
@@ -76,6 +110,11 @@ pub fn socket_path() -> Option<PathBuf> {
 /// Path of the config file.
 pub fn config_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("config.toml"))
+}
+
+/// Path of the list of files open in the window.
+pub fn session_path() -> Option<PathBuf> {
+    state_dir().map(|d| d.join("session.toml"))
 }
 
 /// Path of the recent-files list.
@@ -124,6 +163,8 @@ pub struct Config {
     pub show_sidebar: bool,
     /// Open files in the running window (as new tabs) instead of a new window.
     pub single_window: bool,
+    /// Reopen the files that were open last time.
+    pub restore_session: bool,
 }
 
 impl Default for Config {
@@ -140,6 +181,7 @@ impl Default for Config {
             remote_images: false,
             show_sidebar: true,
             single_window: true,
+            restore_session: true,
         }
     }
 }
@@ -259,6 +301,20 @@ fn canonical(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_round_trip_drops_missing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, gone) = (dir.path().join("a.md"), dir.path().join("gone.md"));
+        std::fs::write(&a, "x").unwrap();
+        let p = dir.path().join("sub/session.toml");
+        assert_eq!(Session::load_from(&p), Session::default());
+        let s = Session { files: vec![gone, a.clone()], active: Some(a.clone()) };
+        s.save_to(&p).unwrap();
+        assert_eq!(Session::load_from(&p), Session { files: vec![a.clone()], active: Some(a) });
+        std::fs::write(&p, "files = [[[").unwrap();
+        assert_eq!(Session::load_from(&p), Session::default());
+    }
 
     #[test]
     fn config_round_trip_and_defaults() {

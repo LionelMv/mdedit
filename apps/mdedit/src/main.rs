@@ -35,11 +35,12 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
-    let targets = cli::classify(&paths);
+    let mut targets = cli::classify(&paths);
+    let config = mdedit_workspace::Config::load();
 
     // Open in the running window if there is one (a failure here just means a new window).
     let mut listener = None;
-    let socket = mdedit_workspace::Config::load().single_window.then(mdedit_workspace::socket_path).flatten();
+    let socket = config.single_window.then(mdedit_workspace::socket_path).flatten();
     if let Some(sock) = &socket {
         match single::claim(sock, &targets.files) {
             Ok(single::Claim::Forwarded) => return std::process::ExitCode::SUCCESS,
@@ -48,6 +49,12 @@ fn main() -> std::process::ExitCode {
         }
     }
     let owns_socket = listener.is_some();
+
+    // A separate window opened for specific files has nothing to do with the last session.
+    targets.save_session = config.single_window || targets.files.is_empty();
+    if config.restore_session && targets.save_session {
+        targets.session = Some(mdedit_workspace::Session::load());
+    }
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
