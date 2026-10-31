@@ -251,6 +251,17 @@ fn code_block_toggle_off() {
 }
 
 #[test]
+fn code_block_toggle_off_in_containers() {
+    assert_eq!(cmd("> ```\n> co|de\n> ```", Command::CodeBlock).unwrap(), "> co|de");
+    assert_eq!(cmd("> ```\n> |a\n> b\n> ```", Command::CodeBlock).unwrap(), "> |a\n> b");
+    assert_eq!(cmd("- ```\n  a|\n  b\n  ```", Command::CodeBlock).unwrap(), "- a|\n  b");
+    assert_eq!(cmd("> - ```\n>   é|\n>   ```", Command::CodeBlock).unwrap(), "> - é|");
+    assert_eq!(cmd("- > ```\n  > a|\n  > ```", Command::CodeBlock).unwrap(), "- > a|");
+    // indentation inside the code is kept, and an unclosed block works too
+    assert_eq!(cmd("> ```\n>   a|\n", Command::CodeBlock).unwrap(), ">   a|\n");
+}
+
+#[test]
 fn math_block() {
     assert_eq!(cmd("|", Command::MathBlock).unwrap(), "$$\n|\n$$");
     assert_eq!(cmd("«x^2»", Command::MathBlock).unwrap(), "$$\n«x^2»\n$$");
@@ -363,6 +374,33 @@ fn tab_in_code_indents() {
     assert_eq!(tab("```\n«a\nb»\n```").unwrap(), "```\n    «a\n    b»\n```");
     assert_eq!(stab("```\n    «a\n\tb»\n```").unwrap(), "```\n«a\nb»\n```");
     assert!(tab("```|\nx\n```").is_none());
+}
+
+#[test]
+fn tab_in_quoted_code_indents_after_the_marker() {
+    assert_eq!(tab("> ```\n> «a\n> b»\n> ```").unwrap(), "> ```\n>     «a\n>     b»\n> ```");
+    assert_eq!(tab("> > ```\n> > «é\n> > b»\n> > ```").unwrap(), "> > ```\n> >     «é\n> >     b»\n> > ```");
+    assert_eq!(tab("- > ```\n  > «a»\n  > ```").unwrap(), "- > ```\n  >     «a»\n  > ```");
+    assert_eq!(tab("> - ```\n>   «a»\n>   ```").unwrap(), "> - ```\n>       «a»\n>   ```");
+    // a caret inside the prefix moves past it
+    assert_eq!(tab("> ```\n|> a\n> ```").unwrap(), "> ```\n>     |a\n> ```");
+    // tab-indented code keeps using tabs
+    assert_eq!(tab("> ```\n> \ta\n> «b»\n> ```").unwrap(), "> ```\n> \ta\n> \t«b»\n> ```");
+}
+
+#[test]
+fn shift_tab_in_code_keeps_the_container_indent() {
+    assert_eq!(stab("- ```\n  «a\n  b»\n  ```").unwrap(), "- ```\n  «a\n  b»\n  ```");
+    assert_eq!(stab("- ```\n      «a\n  b»\n  ```").unwrap(), "- ```\n  «a\n  b»\n  ```");
+    assert_eq!(stab("1. ```\n       «é»\n   ```").unwrap(), "1. ```\n   «é»\n   ```");
+    assert_eq!(stab("- > ```\n  >     «a»\n  > ```").unwrap(), "- > ```\n  > «a»\n  > ```");
+    assert_eq!(stab("> - ```\n>       «a»\n>   ```").unwrap(), "> - ```\n>   «a»\n>   ```");
+    // a tab past the column goes; a tab straddling it shrinks to the column
+    assert_eq!(stab("- ```\n  \t«a»\n  ```").unwrap(), "- ```\n  «a»\n  ```");
+    assert_eq!(stab("- ```\n\t«a»\n  ```").unwrap(), "- ```\n  «a»\n  ```");
+    // indented code keeps the four columns that make it code
+    assert_eq!(stab("    «a»\n").unwrap(), "    «a»\n");
+    assert_eq!(stab("      «a»\n").unwrap(), "    «a»\n");
 }
 
 #[test]
@@ -572,8 +610,63 @@ mod props {
         ]
     }
 
+    /// Kinds of the block tree, ignoring ranges.
+    fn shape(blocks: &[Block]) -> String {
+        blocks
+            .iter()
+            .map(|b| {
+                let k = match b.kind {
+                    BlockKind::BlockQuote => "quote",
+                    BlockKind::List { .. } => "list",
+                    BlockKind::ListItem { .. } => "item",
+                    BlockKind::CodeBlock(_) => "code",
+                    _ => "other",
+                };
+                format!("{k}[{}]", shape(&b.children))
+            })
+            .collect()
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig { cases: 300, ..ProptestConfig::default() })]
+        #[test]
+        fn tab_in_contained_code_keeps_structure(
+            containers in proptest::collection::vec(prop_oneof![Just("> "), Just("- "), Just("1. "), Just("* ")], 0..4),
+            lines in proptest::collection::vec(prop_oneof![
+                Just("a".to_string()),
+                Just("\tb".to_string()),
+                Just("  é🎉".to_string()),
+                Just("      > - x".to_string()),
+                Just(String::new()),
+            ], 1..5),
+        ) {
+            let open: String = containers.concat();
+            let cont = continuation_prefix(&open);
+            let body: Vec<String> = lines.iter().map(|l| format!("{cont}{l}")).collect();
+            let t = format!("{open}```\n{}\n{cont}```\n", body.join("\n"));
+            let blocks = parse(&t);
+            let before = shape(&blocks);
+            let (s, e) = (open.len() + 4, t.len() - cont.len() - 4);
+            let sel = Sel { anchor: s + cont.len(), head: e - 1 };
+
+            let r = on_tab(&t, &blocks, sel, false).expect("tab applies");
+            let tabbed = check_result(&t, &r);
+            let tabbed_blocks = parse(&tabbed);
+            prop_assert_eq!(&shape(&tabbed_blocks), &before, "{:?} -> {:?}", t, tabbed);
+
+            let r = on_tab(&tabbed, &tabbed_blocks, r.selection, true).expect("shift+tab applies");
+            let back = check_result(&tabbed, &r);
+            prop_assert_eq!(&shape(&parse(&back)), &before, "{:?} -> {:?}", t, back);
+            // only blank lines may keep stray trailing whitespace
+            let norm = |s: &str| s.lines().map(|l| l.trim_end().to_string()).collect::<Vec<_>>();
+            prop_assert_eq!(norm(&back), norm(&t));
+
+            // shift+tab alone never reaches into the containers
+            let r = on_tab(&t, &blocks, sel, true).expect("shift+tab applies");
+            let out = check_result(&t, &r);
+            prop_assert_eq!(&shape(&parse(&out)), &before, "{:?} -> {:?}", t, out);
+        }
+
         #[test]
         fn commands_never_panic(pieces in proptest::collection::vec(piece(), 0..25), a in 0usize..200, h in 0usize..200) {
             let t: String = pieces.concat();
@@ -635,4 +728,39 @@ fn enter_renumbers_ordered_list() {
     assert_eq!(enter("1. a|\n5. b\n9. c").unwrap(), "1. a\n2. |\n5. b\n9. c");
     // nested list numbering untouched
     assert_eq!(enter("1. a|\n   1. x\n2. b").unwrap(), "1. a\n2. |\n   1. x\n3. b");
+}
+
+fn run_on(t: &str, sel: Sel, c: Command) -> Option<String> {
+    run(t, &parse(t), sel, &c).map(|r| {
+        let mut s = t.to_string();
+        for e in r.edits.iter().rev() {
+            s.replace_range(e.range.clone(), &e.insert);
+        }
+        s
+    })
+}
+
+#[test]
+fn italic_wraps_selected_bold() {
+    assert_eq!(run_on("**x**", Sel { anchor: 0, head: 5 }, Command::Italic).as_deref(), Some("***x***"));
+}
+
+#[test]
+fn heading_on_a_list_line_keeps_the_list() {
+    let go = |t: &str, n| run_on(t, Sel::caret(t.len()), Command::Heading(n));
+    assert_eq!(go("- foo", 2).as_deref(), Some("- ## foo"));
+    assert_eq!(go("1. foo", 1).as_deref(), Some("1. # foo"));
+    assert_eq!(go("- ## foo", 2).as_deref(), Some("- foo"));
+    assert_eq!(go("> - foo", 3).as_deref(), Some("> - ### foo"));
+    assert_eq!(go("- [ ] foo", 2), None);
+    assert_eq!(go("foo", 2).as_deref(), Some("## foo"));
+}
+
+#[test]
+fn table_does_not_absorb_the_next_line() {
+    let t = "\nnext\n";
+    let out = run_on(t, Sel::caret(0), Command::Table { cols: 1, rows: 1 }).unwrap();
+    assert!(out.ends_with("|\n\nnext\n"), "{out:?}");
+    let t = "a\nnext";
+    assert!(run_on(t, Sel::caret(1), Command::Table { cols: 1, rows: 1 }).unwrap().ends_with("|\n\nnext"));
 }

@@ -255,6 +255,88 @@ fn quote_prefix_len(line: &str) -> usize {
     end
 }
 
+/// How much of a line belongs to the containers around a block on it.
+struct ContainerPrefix {
+    /// Bytes from the line start; ends on a byte the containers don't own.
+    len: usize,
+    /// Columns of a tab just before `len` that lie past the containers (a straddling tab).
+    extra: usize,
+}
+
+/// Next column after a tab at `col`.
+fn tab_stop(col: usize) -> usize {
+    (col / 4 + 1) * 4
+}
+
+/// Column just after `s` (spaces and tabs expand; other bytes are one column).
+fn advance_col(s: &str, mut col: usize) -> usize {
+    for b in s.bytes() {
+        col = if b == b'\t' { tab_stop(col) } else { col + 1 };
+    }
+    col
+}
+
+/// Column where the item's content starts, measured on the line holding its marker.
+fn item_content_col(text: &str, item: &Block) -> usize {
+    let mpos = item_marker_pos(text, item);
+    let le = line_end_no_cr(text, mpos);
+    let col = advance_col(&text[line_start(text, mpos)..mpos], 0);
+    let Some((mlen, wlen)) = list_marker_len(&text[mpos..le]) else { return col + 2 };
+    if text[mpos + wlen..le].trim().is_empty() {
+        return col + mlen + 1; // nothing after the marker: one space belongs to it
+    }
+    advance_col(&text[mpos..mpos + wlen], col)
+}
+
+/// Split the line `l` into the part owned by `containers` (quotes and list items, outermost
+/// first) and the rest; `indent` columns past the containers also count as owned (indented
+/// code). A quote marker missing from the line ends the walk.
+fn container_prefix(text: &str, containers: &[&Block], l: &Range<usize>, indent: usize) -> ContainerPrefix {
+    let line = &text[l.clone()];
+    let b = line.as_bytes();
+    let (mut pos, mut col, mut want) = (0, 0, 0);
+    let skip_ws = |pos: &mut usize, col: &mut usize, want: usize| {
+        while *col < want && matches!(b.get(*pos), Some(b' ' | b'\t')) {
+            *col = advance_col(&line[*pos..*pos + 1], *col);
+            *pos += 1;
+        }
+    };
+    for c in containers {
+        match c.kind {
+            BlockKind::BlockQuote => {
+                skip_ws(&mut pos, &mut col, want);
+                let sp = b[pos..].iter().take(3).take_while(|&&x| x == b' ').count();
+                if b.get(pos + sp) != Some(&b'>') {
+                    return ContainerPrefix { len: pos, extra: col.saturating_sub(want) };
+                }
+                pos += sp + 1;
+                col += sp + 1;
+                want = col;
+                if matches!(b.get(pos), Some(b' ' | b'\t')) {
+                    want += 1;
+                }
+                skip_ws(&mut pos, &mut col, want);
+            }
+            BlockKind::ListItem { .. } => {
+                let mpos = item_marker_pos(text, c);
+                if (l.start..=l.end).contains(&mpos) {
+                    let wlen = list_marker_len(&text[mpos..l.end]).map_or(0, |m| m.1);
+                    col = advance_col(&line[..mpos - l.start + wlen], 0);
+                    pos = mpos - l.start + wlen;
+                    want = col;
+                } else {
+                    want = item_content_col(text, c);
+                    skip_ws(&mut pos, &mut col, want);
+                }
+            }
+            _ => {}
+        }
+    }
+    want += indent;
+    skip_ws(&mut pos, &mut col, want);
+    ContainerPrefix { len: pos, extra: col.saturating_sub(want) }
+}
+
 fn is_thematic_break(line: &str) -> bool {
     let t = line.trim();
     let Some(c) = t.chars().next() else { return false };
@@ -415,6 +497,7 @@ fn toggle_inline(
         && selected.starts_with(marker)
         && selected.ends_with(marker)
         && marker != "`"
+        && !(marker == "*" && is_strong_only(selected))
     {
         let inner = &selected[marker.len()..selected.len() - marker.len()];
         let edits = vec![edit(s..e, inner)];
@@ -437,6 +520,12 @@ fn toggle_inline(
     let ns = s + open.len();
     let ne = e + open.len();
     finish(text, edits, ns, ne).map(|r| keep_dir(r, sel))
+}
+
+/// `**x**`: the stars are bold's, so italic must wrap it rather than take one pair away.
+fn is_strong_only(selected: &str) -> bool {
+    let run = |b: &mut dyn Iterator<Item = u8>| b.take_while(|&c| c == b'*').count();
+    run(&mut selected.bytes()) == 2 && run(&mut selected.bytes().rev()) == 2
 }
 
 /// Keep the selection direction of `orig` for a result whose selection is (start, end).
@@ -513,7 +602,17 @@ fn heading(text: &str, blocks: &[Block], sel: Sel, level: u8) -> Option<CommandR
     let line = &text[ls..le];
     let qp = quote_prefix_len(line);
     let after_q = &line[qp..];
-    let ws = after_q.bytes().take(3).take_while(|&b| b == b' ').count();
+    let indent = after_q.bytes().take_while(|&b| b == b' ').count();
+    // The heading goes after a list marker, so the line stays a list item. A task item can't
+    // hold a heading without losing its checkbox.
+    let marker = list_marker_len(&after_q[indent..]).map(|m| m.1);
+    if marker.is_some_and(|m| after_q[indent + m..].starts_with("[ ] ") || after_q[indent + m..].to_ascii_lowercase().starts_with("[x] ")) {
+        return None;
+    }
+    let ws = match marker {
+        Some(m) => indent + m,
+        None => indent.min(3),
+    };
     let rest = &after_q[ws..];
     let hashes = rest.bytes().take_while(|&b| b == b'#').count();
     let is_atx = (1..=6).contains(&hashes) && matches!(rest.as_bytes().get(hashes), None | Some(b' ' | b'\t'));
@@ -677,11 +776,21 @@ fn fenced_block(text: &str, blocks: &[Block], sel: Sel, ch: char) -> Option<Comm
             let of = info.open_fence.clone()?;
             let mut edits = Vec::new();
             let content_start = b.content.start;
+            // the fence's own prefix stays, so drop the first content line's copy of it
+            let has_content = content_start > of.end
+                && info.close_fence.as_ref().is_none_or(|cf| content_start < line_start(text, cf.start));
+            let dup = if has_content {
+                let first = content_start..line_end_no_cr(text, content_start);
+                container_prefix(text, &block_path(blocks, s), &first, 0).len
+            } else {
+                0
+            };
+            let open_end = content_start.max(of.end) + dup;
             match &info.close_fence {
                 Some(cf) => {
                     let cls = line_start(text, cf.start);
-                    let ce = b.content.end;
-                    edits.push(edit(of.start..content_start.max(of.end), ""));
+                    let ce = b.content.end.max(open_end);
+                    edits.push(edit(of.start..open_end, ""));
                     // remove the newline before the closing fence line and the fence itself
                     if ce < cf.start && cls > content_start {
                         edits.push(edit(ce..cf.end, ""));
@@ -689,7 +798,7 @@ fn fenced_block(text: &str, blocks: &[Block], sel: Sel, ch: char) -> Option<Comm
                         edits.push(edit(cf.start..cf.end, ""));
                     }
                 }
-                None => edits.push(edit(of.start..content_start.max(of.end), "")),
+                None => edits.push(edit(of.start..open_end, "")),
             }
             return finish_mapped(text, edits, sel);
         }
@@ -759,7 +868,10 @@ fn table(text: &str, sel: Sel, cols: usize, rows: usize) -> Option<CommandResult
         (le..le, "\n\n")
     };
     let first_cell = range.start + prefix.len() + 2;
-    let ins = format!("{prefix}{t}");
+    // A line right below would become a table row.
+    let next = (le + 1).min(text.len());
+    let suffix = if next > le && !text[next..line_end_no_cr(text, next)].trim().is_empty() { "\n" } else { "" };
+    let ins = format!("{prefix}{t}{suffix}");
     finish(text, vec![edit(range, ins)], first_cell, first_cell + "Column 1".len())
 }
 
@@ -1033,7 +1145,8 @@ pub fn on_tab(text: &str, blocks: &[Block], sel: Sel, shift: bool) -> Option<Com
         if !is_code_content_pos(text, leaf, info, sel.head) {
             return None;
         }
-        return tab_code(text, leaf, sel, shift);
+        let indent = if info.fence.is_some() { 0 } else { 4 };
+        return tab_code(text, leaf, &path[..path.len() - 1], indent, sel, shift);
     }
     if let BlockKind::Table { rows, .. } = &leaf.kind {
         return tab_table(text, leaf, rows, sel, shift);
@@ -1046,33 +1159,47 @@ pub fn on_tab(text: &str, blocks: &[Block], sel: Sel, shift: bool) -> Option<Com
     None
 }
 
-fn tab_code(text: &str, b: &Block, sel: Sel, shift: bool) -> Option<CommandResult> {
-    let content = &text[b.content.clone()];
-    let uses_tabs = content.lines().any(|l| l.starts_with('\t'));
+/// Indentation only changes past `containers`' prefix (plus `indent` columns for indented
+/// code), so the block stays inside its quotes and list items.
+fn tab_code(text: &str, b: &Block, containers: &[&Block], indent: usize, sel: Sel, shift: bool) -> Option<CommandResult> {
+    let uses_tabs = lines_in(text, b.content.start, b.content.end).iter().any(|l| {
+        let p = container_prefix(text, containers, l, indent);
+        p.extra > 0 || text[l.start + p.len..l.end].starts_with('\t')
+    });
     let unit = if uses_tabs { "\t" } else { "    " };
     if sel.is_empty() && !shift {
-        let c = sel.head;
+        let ls = line_start(text, sel.head);
+        let l = ls..line_end_no_cr(text, sel.head);
+        let c = sel.head.max(ls + container_prefix(text, containers, &l, indent).len);
         let caret = c + unit.len();
         return finish(text, vec![edit(c..c, unit)], caret, caret);
     }
     let lines = lines_in(text, sel.start(), sel.end());
     let mut edits = Vec::new();
     for l in lines {
-        if l.start < b.content.start.min(l.start.max(b.content.start)) || l.start > b.content.end {
+        if l.end < b.content.start || l.start > b.content.end {
             continue;
         }
         let line = &text[l.clone()];
+        let p = container_prefix(text, containers, &l, indent);
+        let at = l.start + p.len;
         if shift {
-            let n = if line.starts_with('\t') {
+            let rest = &line[p.len..];
+            let n = if rest.starts_with('\t') {
                 1
             } else {
-                line.bytes().take(4).take_while(|&c| c == b' ').count()
+                rest.bytes().take(4).take_while(|&c| c == b' ').count()
             };
             if n > 0 {
-                edits.push(edit(l.start..l.start + n, ""));
+                edits.push(edit(at..at + n, ""));
+            } else if p.extra > 0 {
+                // a tab straddles the container's column: keep just the columns it owns
+                let before = advance_col(&line[..p.len - 1], 0);
+                let owned = tab_stop(before) - before - p.extra;
+                edits.push(edit(at - 1..at, " ".repeat(owned)));
             }
         } else if !line.is_empty() || l.start == line_start(text, sel.head) {
-            edits.push(edit(l.start..l.start, unit));
+            edits.push(edit(at..at, unit));
         }
     }
     if edits.is_empty() {

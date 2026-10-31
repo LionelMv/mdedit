@@ -207,6 +207,16 @@ mod tests {
 
 #[cfg(test)]
 mod regression {
+    /// Found by the style crate's fuzzing: a bare `\r` puts the block start before its line's.
+    #[test]
+    fn code_lines_with_a_bare_cr_before_multibyte() {
+        for t in ["日\r~~~", "\u{2028}\r```"] {
+            for b in &crate::parse(t) {
+                let _ = crate::code_lines(t, b);
+            }
+        }
+    }
+
     /// Found by the style crate's fuzzing: an inline code span ending in `\r` before a
     /// multi-byte char made `parse` slice inside `é`.
     #[test]

@@ -952,7 +952,7 @@ pub fn code_lines(text: &str, block: &Block) -> Vec<Range<usize>> {
     let prefix = &text[pstart..block.range.start];
     let fence_indent = info.fence.map_or(0, |f| f.indent);
     let container_prefix = if info.fence.is_some() {
-        &prefix[..prefix.len().saturating_sub(fence_indent)]
+        &prefix[..floor_boundary(prefix, prefix.len().saturating_sub(fence_indent))]
     } else {
         // indented code: drop the code's own 4 columns of indentation from the prefix
         let mut cut = prefix.len();
