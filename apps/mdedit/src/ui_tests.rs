@@ -191,3 +191,277 @@ fn tab_switch_keeps_scroll_position() {
     let differing = first.pixels().zip(last.pixels()).filter(|(a, b)| a.0.iter().zip(b.0).any(|(x, y)| x.abs_diff(y) > 25)).count();
     assert!(differing < 500, "{differing} pixels differ after switching tabs and back");
 }
+
+fn start(files: Vec<std::path::PathBuf>) -> Harness<'static, MdApp> {
+    assert!(std::env::var_os(mdedit_workspace::HOME_ENV).is_some(), "set MDEDIT_HOME to a scratch dir");
+    let targets = StartupTargets { files, ..Default::default() };
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| MdApp::new(cc, targets));
+    h.run_steps(3);
+    h
+}
+
+fn write_file(dir: &tempfile::TempDir, name: &str) -> std::path::PathBuf {
+    let p = dir.path().join(name);
+    std::fs::write(&p, "# Heading one\n\ntext\n\n# Heading two\n").unwrap();
+    p
+}
+
+fn type_text(h: &mut Harness<'_, MdApp>, text: &str) {
+    h.event(egui::Event::Text(text.to_string()));
+    h.run_steps(3);
+}
+
+/// Press and release in separate frames, as a real mouse does.
+fn slow_click(h: &mut Harness<'_, MdApp>, label: &str) {
+    let pos = h.get_by_label(label).rect().center();
+    let pos = egui::pos2(pos.x, pos.y);
+    h.hover_at(pos);
+    h.run_steps(2);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+    }
+    h.run_steps(3);
+}
+
+/// With two snapshots of one file the newest wins, and the older one is gone for good (it used
+/// to overwrite the newer text, and the newer snapshot was deleted).
+#[test]
+#[ignore]
+fn restore_keeps_the_newest_snapshot_of_a_file() {
+    use mdedit_workspace::recovery;
+    assert!(std::env::var_os(mdedit_workspace::HOME_ENV).is_some(), "set MDEDIT_HOME to a scratch dir");
+    let dir = tempfile::tempdir().unwrap();
+    let file = write_file(&dir, "doc.md");
+    recovery::write("r1-100-0", Some(&file), "# Older crash\n").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    recovery::write("r1-200-0", Some(&file), "# Newer crash\n").unwrap();
+    let mut h = start(vec![]);
+    h.get_by_label("Restore").click();
+    h.run_steps(5);
+    h.get_by_label("Newer crash");
+    assert!(h.query_by_label("Older crash").is_none());
+    assert_eq!(h.query_all_by_label("doc.md •").count(), 1);
+    let left: Vec<String> = recovery::list().into_iter().map(|s| s.id).collect();
+    assert_eq!(left, ["r1-200-0"]);
+    recovery::remove("r1-200-0").unwrap();
+}
+
+/// Text typed after clicking a tab, in either way of clicking, goes to that tab's document.
+#[test]
+#[ignore]
+fn clicking_a_tab_focuses_the_editor() {
+    let dir = tempfile::tempdir().unwrap();
+    let (x, y) = (write_file(&dir, "x.md"), write_file(&dir, "y.md"));
+    let mut h = start(vec![x, y]);
+    slow_click(&mut h, "x.md");
+    type_text(&mut h, "a");
+    h.get_by_label("x.md •");
+    h.get_by_label("y.md").click();
+    h.run_steps(3);
+    type_text(&mut h, "b");
+    h.get_by_label("y.md •");
+}
+
+/// Same for closing a tab: the tab left active takes the keys.
+#[test]
+#[ignore]
+fn closing_a_tab_by_click_focuses_the_editor() {
+    let dir = tempfile::tempdir().unwrap();
+    let (x, y) = (write_file(&dir, "x.md"), write_file(&dir, "y.md"));
+    let mut h = start(vec![x, y]);
+    h.get_all_by_label("✕").last().unwrap().click();
+    h.run_steps(3);
+    assert!(h.query_by_label("y.md").is_none());
+    type_text(&mut h, "a");
+    h.get_by_label("x.md •");
+}
+
+#[test]
+#[ignore]
+fn clicking_an_outline_heading_focuses_the_editor() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = start(vec![write_file(&dir, "x.md")]);
+    slow_click(&mut h, "Heading two");
+    type_text(&mut h, "a");
+    h.get_by_label("x.md •");
+    let mut h = start(vec![write_file(&dir, "y.md")]);
+    h.get_by_label("Heading two").click();
+    h.run_steps(3);
+    type_text(&mut h, "a");
+    h.get_by_label("y.md •");
+}
+
+/// Keyboard tab switching keeps focusing the editor, and the find bar keeps its own focus even
+/// right after a click that refocuses the editor.
+#[test]
+#[ignore]
+fn keyboard_activation_and_find_bar_keep_focus() {
+    let dir = tempfile::tempdir().unwrap();
+    let (x, y) = (write_file(&dir, "x.md"), write_file(&dir, "y.md"));
+    let mut h = start(vec![x, y]);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Tab);
+    h.run_steps(3);
+    type_text(&mut h, "a");
+    h.get_by_label("x.md •");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+    h.run_steps(3);
+    type_text(&mut h, "zzz");
+    h.get_by_label("No results");
+    drop(h);
+
+    let (x, y) = (write_file(&dir, "x.md"), write_file(&dir, "y.md"));
+    let mut h = start(vec![x, y]);
+    h.get_by_label("x.md").click();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+    h.run_steps(4);
+    type_text(&mut h, "zzz");
+    h.get_by_label("No results");
+    h.get_by_label("x.md");
+}
+
+/// A path that doesn't exist yet opens one tab however many times it is asked for.
+#[test]
+#[ignore]
+fn missing_path_opens_one_tab() {
+    assert!(std::env::var_os(mdedit_workspace::HOME_ENV).is_some(), "set MDEDIT_HOME to a scratch dir");
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("new.md");
+    let sock = dir.path().join("s.sock");
+    let crate::single::Claim::First(listener) = crate::single::claim(&sock, &[]).unwrap() else { panic!("first start") };
+    let targets = StartupTargets { files: vec![file.clone(), file.clone(), dir.path().join("./new.md")], ..Default::default() };
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| {
+        let app = MdApp::new(cc, targets);
+        app.listen(listener);
+        app
+    });
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("new.md").count(), 1);
+    assert!(matches!(crate::single::claim(&sock, std::slice::from_ref(&file)).unwrap(), crate::single::Claim::Forwarded));
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run_steps(1);
+    }
+    assert_eq!(h.query_all_by_label("new.md").count(), 1);
+}
+
+/// A FIFO gets an error toast and no tab, whichever way it is reached (it used to freeze).
+#[test]
+#[ignore]
+fn fifo_is_refused_everywhere() {
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("pipe.md");
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let toast = format!("Can't open {}: not a regular file", fifo.display());
+    let refused = |h: &Harness<'_, MdApp>| {
+        assert!(h.query_all_by_label(&toast).count() > 0, "no toast");
+        assert!(h.query_by_label("pipe.md").is_none(), "opened a tab");
+    };
+
+    // Command line.
+    let h = start(vec![fifo.clone()]);
+    refused(&h);
+    drop(h);
+
+    // Session.
+    let session = mdedit_workspace::Session { files: vec![fifo.clone()], active: Some(fifo.clone()) };
+    let targets = StartupTargets { session: Some(session), ..Default::default() };
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| MdApp::new(cc, targets));
+    h.run_steps(3);
+    refused(&h);
+    drop(h);
+
+    // Drop.
+    let mut h = start(vec![]);
+    h.input_mut().dropped_files.push(std::sync::Arc::new(Dropped(fifo.clone())));
+    h.run_steps(3);
+    refused(&h);
+    drop(h);
+
+    // Recent files.
+    mdedit_workspace::RecentFiles { files: vec![fifo.clone()] }.save().unwrap();
+    let mut h = start(vec![]);
+    h.get_by_label("File").click();
+    h.run_steps(2);
+    h.get_by_label("Open Recent").hover();
+    h.run_steps(2);
+    h.query_all_by(|n| n.label().is_some_and(|l| l.contains("pipe.md"))).last().expect("recent entry").click();
+    h.run_steps(3);
+    refused(&h);
+}
+
+fn image_bytes_held(h: &Harness<'_, MdApp>) -> [usize; 3] {
+    let l = h.ctx.loaders();
+    [
+        l.bytes.lock().iter().map(|x| x.byte_size()).sum(),
+        l.image.lock().iter().map(|x| x.byte_size()).sum(),
+        l.texture.lock().iter().map(|x| x.byte_size()).sum(),
+    ]
+}
+
+/// Two tabs show one image: closing the first keeps it, closing the last frees it.
+#[test]
+#[ignore]
+fn closing_last_tab_showing_an_image_frees_it() {
+    std::env::var_os(mdedit_workspace::HOME_ENV).expect("set MDEDIT_HOME to a scratch dir");
+    let d = tempfile::tempdir().unwrap();
+    image::RgbaImage::new(64, 64).save(d.path().join("a.png")).unwrap();
+    let files: Vec<_> = ["1.md", "2.md"].map(|n| d.path().join(n)).into();
+    for f in &files {
+        std::fs::write(f, "# t\n\n![x](a.png)\n").unwrap();
+    }
+    let targets = StartupTargets { files, ..Default::default() };
+    let mut h = Harness::builder().with_size(egui::vec2(1100.0, 750.0)).build_eframe(|cc| MdApp::new(cc, targets));
+    let settle = |h: &mut Harness<'_, MdApp>| {
+        for _ in 0..30 {
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    };
+    settle(&mut h);
+    assert!(image_bytes_held(&h).iter().all(|&b| b > 0), "{:?}", image_bytes_held(&h));
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::W);
+    settle(&mut h);
+    assert!(image_bytes_held(&h).iter().all(|&b| b > 0), "{:?}", image_bytes_held(&h));
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::W);
+    settle(&mut h);
+    assert_eq!(image_bytes_held(&h), [0, 0, 0]);
+}
+
+/// A config that can't be written is reported once per change, not retried every frame.
+#[test]
+#[ignore]
+fn failed_config_save_is_not_retried_every_frame() {
+    let home = std::env::var_os(mdedit_workspace::HOME_ENV).expect("set MDEDIT_HOME to a scratch dir");
+    let target = std::path::Path::new(&home).join("config/config.toml");
+    std::fs::create_dir_all(&target).unwrap(); // a directory: saving it fails
+    let mut h = start(vec![]);
+    h.get_by_label("View").click();
+    h.run_steps(2);
+    h.get_by_label("Theme").hover();
+    h.run_steps(2);
+    h.get_by_label("Dark").click();
+    h.run_steps(3);
+    let saved = h.state().config_is_saved();
+    std::fs::remove_dir(&target).unwrap();
+    assert!(saved, "the failed save must not stay pending");
+}
+
+/// Save on a quit prompt while a file dialog is open can't start Save As: it must keep asking,
+/// and the window's close button must still work afterwards.
+#[test]
+#[ignore]
+fn quit_save_with_a_dialog_open_keeps_asking() {
+    assert!(std::env::var_os(mdedit_workspace::HOME_ENV).is_some(), "set MDEDIT_HOME to a scratch dir");
+    let mut h = start(vec![]);
+    h.run_steps(3);
+    type_text(&mut h, "unsaved");
+    h.state_mut().set_dialog_busy(true);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Q);
+    h.run_steps(3);
+    assert!(h.state().close_is_pending());
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert!(h.state().close_is_pending(), "still asking");
+}
+

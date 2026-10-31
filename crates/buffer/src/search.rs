@@ -46,11 +46,16 @@ pub fn build_regex(query: &str, opts: &SearchOptions) -> Result<regex::Regex, St
 /// An empty query returns no matches. Capped at 100 000 matches. Empty-width matches are
 /// skipped.
 pub fn find_all(text: &str, query: &str, opts: &SearchOptions) -> Result<Vec<Range<usize>>, String> {
+    find_up_to(text, query, opts, MAX_MATCHES)
+}
+
+/// [`find_all`] with an explicit cap (replace-all must see every match).
+pub fn find_up_to(text: &str, query: &str, opts: &SearchOptions, limit: usize) -> Result<Vec<Range<usize>>, String> {
     if query.is_empty() {
         return Ok(Vec::new());
     }
     let re = build_regex(query, opts)?;
-    Ok(re.find_iter(text).filter(|m| !m.range().is_empty()).take(MAX_MATCHES).map(|m| m.range()).collect())
+    Ok(re.find_iter(text).filter(|m| !m.range().is_empty()).take(limit).map(|m| m.range()).collect())
 }
 
 #[cfg(test)]

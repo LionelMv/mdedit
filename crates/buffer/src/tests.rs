@@ -316,3 +316,10 @@ fn document_title_prefers_path_then_name() {
     d.path = Some("/tmp/notes.md".into());
     assert_eq!(d.title(), "notes.md");
 }
+
+#[test]
+fn find_up_to_goes_past_the_painting_cap() {
+    let big = "a".repeat(crate::MAX_MATCHES + 10);
+    assert_eq!(crate::find_all(&big, "a", &crate::SearchOptions::default()).unwrap().len(), crate::MAX_MATCHES);
+    assert_eq!(crate::find_up_to(&big, "a", &crate::SearchOptions::default(), usize::MAX).unwrap().len(), big.len());
+}

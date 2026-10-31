@@ -79,6 +79,8 @@ pub struct MdApp {
     /// Keep the session file up to date (see `StartupTargets::save_session`).
     save_session: bool,
     last_session: Option<Session>,
+    /// A click this frame should end with the editor focused (see `MdApp::ui`).
+    refocus_editor: bool,
     last_zoom: f32,
     actions: Vec<Action>,
     ctx: egui::Context,
@@ -131,6 +133,7 @@ impl MdApp {
             last_title: String::new(),
             save_session: targets.save_session,
             last_session: None,
+            refocus_editor: false,
             last_zoom: ctx.zoom_factor(),
             actions: Vec::new(),
             ctx: ctx.clone(),
@@ -628,7 +631,18 @@ impl MdApp {
 
     fn restore_snapshots(&mut self, ctx: &egui::Context) {
         let snaps = std::mem::take(&mut self.recovery_offer);
+        // Newest first, so the first snapshot of a path wins and older ones of it are dropped.
+        let mut restored: Vec<PathBuf> = Vec::new();
         for s in snaps {
+            if let Some(p) = s.path.as_deref() {
+                if restored.iter().any(|r| same_file(r, p)) {
+                    if let Err(e) = recovery::remove(&s.id) {
+                        self.toasts.error(format!("Can't delete snapshot: {e}"));
+                    }
+                    continue;
+                }
+                restored.push(p.to_path_buf());
+            }
             let existing = s.path.as_deref().and_then(|p| self.find_tab_by_path(p));
             let idx = match existing {
                 Some(i) => {
@@ -876,6 +890,7 @@ impl MdApp {
                 }
             });
         });
+        self.refocus_editor |= activate.is_some() || close.is_some();
         if let Some(i) = activate {
             self.activate(i);
         }
@@ -964,6 +979,19 @@ impl MdApp {
     }
 }
 
+#[cfg(test)]
+impl MdApp {
+    pub fn config_is_saved(&self) -> bool {
+        self.config == self.saved_config
+    }
+    pub fn set_dialog_busy(&mut self, busy: bool) {
+        self.dialog_busy = busy;
+    }
+    pub fn close_is_pending(&self) -> bool {
+        self.pending_close.is_some()
+    }
+}
+
 impl eframe::App for MdApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -1047,7 +1075,7 @@ impl eframe::App for MdApp {
                 && let Some(tab) = self.tabs.get_mut(self.active)
             {
                 tab.editor.scroll_to(&mut tab.doc, at);
-                tab.editor.request_focus = true;
+                self.refocus_editor = true;
             }
         } else {
             // Collapsed: a thin strip with a button that brings the outline back.
@@ -1086,6 +1114,15 @@ impl eframe::App for MdApp {
         });
         if let Some(url) = link {
             self.handle_link(&url);
+        }
+        // Clicking a widget above surrenders focus for every widget not under the pointer, the
+        // editor included, for the rest of this frame. Ask for it next frame instead. Before the
+        // actions run, so that Find can still take the focus for its bar.
+        if std::mem::take(&mut self.refocus_editor)
+            && let Some(tab) = self.tabs.get_mut(self.active)
+        {
+            tab.editor.request_focus = true;
+            ctx.request_repaint();
         }
 
         // Modals and windows.
@@ -1210,7 +1247,11 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
     }
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(x), Ok(y)) => x == y,
-        _ => false,
+        // Not created yet: the same name in the same folder.
+        _ => {
+            let folder = |p: &Path| p.parent().and_then(|d| std::fs::canonicalize(d).ok());
+            a.file_name() == b.file_name() && folder(a).is_some() && folder(a) == folder(b)
+        }
     }
 }
 
@@ -1243,6 +1284,10 @@ mod tests {
         assert!(same_file(&a, &a));
         assert!(same_file(&a, &dir.path().join("./a.md")));
         assert!(!same_file(&a, &dir.path().join("b.md")));
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        assert!(same_file(&dir.path().join("new.md"), &sub.join("../new.md")));
+        assert!(!same_file(&dir.path().join("new.md"), &sub.join("new.md")));
         #[cfg(unix)]
         {
             let l = dir.path().join("link.md");

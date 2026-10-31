@@ -18,7 +18,7 @@ mod search;
 
 pub use document::{Document, LineEnding, MAX_FILE_SIZE, normalize_text};
 pub use movement::{next_grapheme, next_word, prev_grapheme, prev_word, word_at};
-pub use search::{MAX_MATCHES, SearchOptions, build_regex, find_all};
+pub use search::{MAX_MATCHES, SearchOptions, build_regex, find_all, find_up_to};
 
 /// One replacement: bytes `range` of the text *before* the edit are replaced by `insert`.
 /// STABLE.

@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use mdedit_buffer::{Edit, EditKind, SearchOptions, Selection, find_all};
+use mdedit_buffer::{Edit, EditKind, SearchOptions, Selection, build_regex, find_all, find_up_to};
 
 use crate::tabs::Tab;
 
@@ -145,6 +145,9 @@ impl FindBar {
         }
         let text = tab.doc.buffer.text();
         let (edits, caret) = replace_edits(&text, std::slice::from_ref(&m), &self.query, &self.replacement, &self.opts);
+        if edits.is_empty() {
+            return;
+        }
         tab.doc.buffer.apply(edits, Selection::caret(caret), EditKind::Other);
         self.select_after_recompute = true;
     }
@@ -154,8 +157,13 @@ impl FindBar {
             return 0;
         }
         let text = tab.doc.buffer.text();
-        let (edits, caret) = replace_edits(&text, &self.matches, &self.query, &self.replacement, &self.opts);
+        // `self.matches` is capped for painting; every match gets replaced.
+        let Ok(all) = find_up_to(&text, &self.query, &self.opts, usize::MAX) else { return 0 };
+        let (edits, caret) = replace_edits(&text, &all, &self.query, &self.replacement, &self.opts);
         let n = edits.len();
+        if n == 0 {
+            return 0;
+        }
         tab.doc.buffer.apply(edits, Selection::caret(caret), EditKind::Other);
         n
     }
@@ -246,9 +254,11 @@ impl FindBar {
                 }
                 if ui.button("Replace").clicked() {
                     self.replace_one(tab);
+                    tab.editor.request_focus = true; // so Ctrl+Z undoes it
                 }
                 if ui.button("Replace All").clicked() {
                     let n = self.replace_all(tab);
+                    tab.editor.request_focus = true;
                     msg = Some(format!("Replaced {n} occurrence{}", if n == 1 { "" } else { "s" }));
                 }
             });
@@ -265,9 +275,20 @@ impl FindBar {
 }
 
 /// Edits replacing each match, plus the caret offset (in the new text) after the last one.
-/// In regex mode `$1`/`${name}` in `replacement` expand to capture groups.
+/// In regex mode `$1`/`${name}` in `replacement` expand to capture groups; a regex that doesn't
+/// build gives no edits, rather than writing `$1` into the document.
 pub fn replace_edits(text: &str, matches: &[Range<usize>], query: &str, replacement: &str, opts: &SearchOptions) -> (Vec<Edit>, usize) {
-    let re = if opts.regex { build_regex(query, opts) } else { None };
+    let re = if opts.regex {
+        match build_regex(query, opts) {
+            Ok(re) => Some(re),
+            Err(e) => {
+                log::debug!("replace with invalid regex: {e}");
+                return (Vec::new(), 0);
+            }
+        }
+    } else {
+        None
+    };
     let mut edits = Vec::with_capacity(matches.len());
     let mut delta: isize = 0;
     let mut caret = 0usize;
@@ -292,11 +313,6 @@ pub fn replace_edits(text: &str, matches: &[Range<usize>], query: &str, replacem
         edits.push(Edit::replace(m.clone(), insert));
     }
     (edits, caret)
-}
-
-fn build_regex(query: &str, opts: &SearchOptions) -> Option<regex::Regex> {
-    let pat = if opts.whole_word { format!(r"\b(?:{query})\b") } else { query.to_string() };
-    regex::RegexBuilder::new(&pat).case_insensitive(!opts.case_sensitive).multi_line(true).size_limit(10 << 20).build().ok()
 }
 
 #[cfg(test)]
@@ -335,6 +351,25 @@ mod tests {
         let out = apply(text, &edits);
         assert_eq!(out, "1:a, 22:b");
         assert_eq!(caret, out.len());
+    }
+
+    /// Find allows a bigger compiled regex than replace used to: groups came out as literal `$2`.
+    #[test]
+    fn replace_expands_groups_of_a_large_regex() {
+        let query = r"(\pL{1,500})=(\d)";
+        assert!(regex::RegexBuilder::new(query).size_limit(10 << 20).build().is_err(), "over the old limit");
+        let opts = SearchOptions { regex: true, case_sensitive: true, whole_word: false };
+        let text = "ab=1";
+        let m = find_all(text, query, &opts).unwrap();
+        let (edits, _) = replace_edits(text, &m, query, "[$2]", &opts);
+        assert_eq!(apply(text, &edits), "[1]");
+    }
+
+    #[test]
+    fn replace_with_invalid_regex_edits_nothing() {
+        let opts = SearchOptions { regex: true, ..Default::default() };
+        let (edits, _) = replace_edits("(a", std::slice::from_ref(&(0..2)), "(", "$1", &opts);
+        assert!(edits.is_empty());
     }
 
     #[test]

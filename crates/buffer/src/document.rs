@@ -78,13 +78,15 @@ impl Document {
     }
     /// Read a file. Rejects non-UTF-8 with `InvalidData`. Strips and remembers a BOM, detects
     /// the dominant line ending and normalizes to `\n`. Files over 200 MB are refused
-    /// (`FileTooLarge`).
+    /// (`FileTooLarge`), and so is anything but a regular file or a symlink to one
+    /// (`InvalidInput` for FIFOs, devices and sockets).
     pub fn open(path: &Path) -> io::Result<Self> {
+        // Before opening: opening a FIFO blocks until it has a writer.
+        check_regular(path, &std::fs::metadata(path)?)?;
         let file = std::fs::File::open(path)?;
+        // Again on what was opened, in case the path changed in between.
         let meta = file.metadata()?;
-        if meta.is_dir() {
-            return Err(io::Error::new(io::ErrorKind::IsADirectory, format!("{} is a directory", path.display())));
-        }
+        check_regular(path, &meta)?;
         let too_large =
             || io::Error::new(io::ErrorKind::FileTooLarge, format!("{} is larger than 200 MB", path.display()));
         if meta.len() > MAX_FILE_SIZE {
@@ -152,6 +154,17 @@ impl Document {
     }
 }
 
+/// Only regular files can be read as documents. The message reads well after "Can't open <path>: ".
+fn check_regular(path: &Path, meta: &std::fs::Metadata) -> io::Result<()> {
+    if meta.is_dir() {
+        return Err(io::Error::new(io::ErrorKind::IsADirectory, format!("{} is a directory", path.display())));
+    }
+    if !meta.is_file() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +224,45 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(Document::open(&dir.path().join("nope")).err().unwrap().kind(), io::ErrorKind::NotFound);
         assert!(Document::open(dir.path()).is_err());
+    }
+
+    /// Opening a FIFO used to block until a writer appeared.
+    #[cfg(unix)]
+    #[test]
+    fn open_refuses_fifo_without_blocking() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("f.md");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        let link = dir.path().join("link.md");
+        std::os::unix::fs::symlink(&fifo, &link).unwrap();
+        for p in [fifo, link] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || tx.send(Document::open(&p).map(|_| ()).map_err(|e| e.kind())));
+            let res = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("open blocked");
+            assert_eq!(res, Err(io::ErrorKind::InvalidInput));
+        }
+    }
+
+    /// `/dev/zero` used to be read up to the 200 MB limit before being refused.
+    #[cfg(unix)]
+    #[test]
+    fn open_refuses_devices() {
+        let err = Document::open(Path::new("/dev/zero")).err().unwrap();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(err.to_string(), "not a regular file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_follows_symlink_to_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("real.md");
+        std::fs::write(&file, "text\n").unwrap();
+        let link = dir.path().join("link.md");
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        let d = Document::open(&link).unwrap();
+        assert_eq!(d.buffer.text(), "text\n");
+        assert_eq!(d.path.as_deref(), Some(link.as_path()));
     }
 
     #[test]
