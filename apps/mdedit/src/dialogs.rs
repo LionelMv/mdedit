@@ -111,11 +111,11 @@ impl TableDialog {
             ui.heading("Insert table");
             ui.add_space(6.0);
             egui::Grid::new("table-grid").num_columns(2).show(ui, |ui| {
-                ui.label("Columns");
-                ui.add(egui::DragValue::new(&mut self.cols).range(1..=30));
+                let label = ui.label("Columns");
+                ui.add(egui::DragValue::new(&mut self.cols).range(1..=30)).labelled_by(label.id);
                 ui.end_row();
-                ui.label("Rows");
-                ui.add(egui::DragValue::new(&mut self.rows).range(1..=200));
+                let label = ui.label("Rows");
+                ui.add(egui::DragValue::new(&mut self.rows).range(1..=200)).labelled_by(label.id);
                 ui.end_row();
             });
             ui.add_space(8.0);
@@ -123,7 +123,9 @@ impl TableDialog {
                 if ui.button("Insert").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     result = Some((self.cols.clamp(1, 30), self.rows.clamp(1, 200)));
                 }
+                // Enter on a focused Cancel is also a click: Cancel wins.
                 if ui.button("Cancel").clicked() {
+                    result = None;
                     close = true;
                 }
             });

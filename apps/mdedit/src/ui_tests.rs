@@ -292,6 +292,45 @@ fn clicking_an_outline_heading_focuses_the_editor() {
     h.get_by_label("y.md •");
 }
 
+/// Clicking where there is no widget, in the outline or beside it, leaves the keys on the editor.
+#[test]
+#[ignore]
+fn clicking_empty_sidebar_space_keeps_editor_focus() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = start(vec![write_file(&dir, "x.md")]);
+    let below = h.get_by_label("Heading two").rect();
+    let pos = egui::pos2(below.center().x, 600.0);
+    h.hover_at(pos);
+    h.run_steps(2);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+    }
+    h.run_steps(3);
+    type_text(&mut h, "a");
+    h.get_by_label("x.md •");
+}
+
+/// Enter with Cancel focused cancels: no table.
+#[test]
+fn enter_on_table_dialog_cancel_inserts_nothing() {
+    let mut dialog = crate::dialogs::TableDialog { open: true, ..Default::default() };
+    let result = std::cell::Cell::new(None);
+    let mut h = Harness::new_ui(|ui| {
+        if let Some(r) = dialog.show(ui.ctx()) {
+            result.set(Some(r));
+        }
+    });
+    h.run_steps(3);
+    h.get_by_label("Cancel").focus();
+    h.run_steps(3);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    drop(h);
+    assert_eq!(result.get(), None);
+    assert!(!dialog.open);
+}
+
 /// Keyboard tab switching keeps focusing the editor, and the find bar keeps its own focus even
 /// right after a click that refocuses the editor.
 #[test]

@@ -1123,6 +1123,15 @@ impl eframe::App for MdApp {
         if let Some(url) = link {
             self.handle_link(&url);
         }
+        // A click on empty panel space drops the focus too, and nothing else would take it back.
+        // Not over a window: its keys mustn't reach the document behind it.
+        if !self.modal_open()
+            && ctx.memory(|m| m.focused().is_none())
+            && ctx.input(|i| i.pointer.any_released().then(|| i.pointer.latest_pos()).flatten())
+                .is_some_and(|pos| ctx.layer_id_at(pos).is_none_or(|l| l == egui::LayerId::background()))
+        {
+            self.refocus_editor = true;
+        }
         // Clicking a widget above surrenders focus for every widget not under the pointer, the
         // editor included, for the rest of this frame. Ask for it next frame instead. Before the
         // actions run, so that Find can still take the focus for its bar.
