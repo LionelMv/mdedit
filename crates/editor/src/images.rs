@@ -1,20 +1,26 @@
 //! Image URL resolution for `Decoration::Image`, plus safety checks for local files
 //! (no devices/FIFOs, size and pixel-dimension limits) before egui's loaders touch them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// Largest local image file we hand to the loaders.
 pub(crate) const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
-/// Largest raster image (either side, in pixels) we decode.
+/// Largest raster image (either side, in pixels) we decode, however large the GPU's limit.
 pub(crate) const MAX_IMAGE_SIDE: u32 = 8192;
 
+/// Largest image side usable right now: the painter panics on textures above the GPU's limit.
+pub(crate) fn max_side(ctx: &egui::Context) -> u32 {
+    ctx.input(|i| i.max_texture_side).clamp(16, MAX_IMAGE_SIDE as usize) as u32
+}
+
 /// Check a local image file before loading: must be a regular file (not a device, FIFO,
-/// directory), at most [`MAX_IMAGE_BYTES`], and — for raster formats — at most
-/// [`MAX_IMAGE_SIDE`]² pixels according to its header. SVGs are allowed (the editor asks the
-/// loader to rasterize them at display size). `Err` holds a short reason for the placeholder.
-pub(crate) fn check_local(path: &Path) -> Result<(), String> {
+/// directory), at most [`MAX_IMAGE_BYTES`], and — for raster formats — at most `max_side`²
+/// pixels according to its header. SVGs are allowed (the editor asks the loader to rasterize
+/// them at display size). `Err` holds a short reason for the placeholder.
+pub(crate) fn check_local(path: &Path, max_side: u32) -> Result<(), String> {
     let meta = std::fs::metadata(path).map_err(|_| "not found".to_owned())?;
     if !meta.is_file() {
         return Err("not a file".into());
@@ -30,46 +36,81 @@ pub(crate) fn check_local(path: &Path) -> Result<(), String> {
     let reader = reader.with_guessed_format().map_err(|_| "unreadable".to_owned())?;
     if reader.format().is_none() {
         // Not a raster format we can inspect; allow only if it looks like SVG text.
-        let head = std::fs::read(path).ok().map(|b| b.into_iter().take(512).collect::<Vec<u8>>()).unwrap_or_default();
+        let mut head = Vec::with_capacity(512);
+        if let Ok(f) = std::fs::File::open(path) {
+            let _ = f.take(512).read_to_end(&mut head);
+        }
         let head = String::from_utf8_lossy(&head).to_ascii_lowercase();
         return if head.contains("<svg") { Ok(()) } else { Err("unsupported format".into()) };
     }
     let (w, h) = reader.into_dimensions().map_err(|_| "unsupported or corrupt image".to_owned())?;
-    if w > MAX_IMAGE_SIDE || h > MAX_IMAGE_SIDE {
+    if w > max_side || h > max_side {
         return Err(format!("too large: {w}×{h} px"));
     }
     Ok(())
 }
 
-/// Caches [`check_local`] results per path, invalidated when size or mtime change.
-type CheckEntry = (Option<SystemTime>, u64, Result<(), String>);
+/// Check a decoded image, for what [`check_local`] can't see: remote images, or a file replaced
+/// after its check. Decoded images are cached by the loaders, so this costs a lookup.
+pub(crate) fn check_decoded(ctx: &egui::Context, uri: &str, hint: egui::SizeHint, max_side: u32) -> Result<(), String> {
+    match ctx.try_load_image(uri, hint) {
+        Ok(egui::load::ImagePoll::Ready { image }) if image.width().max(image.height()) > max_side as usize => {
+            Err(format!("too large: {}×{} px", image.width(), image.height()))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Caches [`check_local`] results per path, invalidated when size, mtime or the side limit change.
+type CheckEntry = (Option<SystemTime>, u64, u32, Result<(), String>);
 
 #[derive(Default)]
 pub(crate) struct ImageGuard {
     cache: HashMap<PathBuf, CheckEntry>,
+    /// Every URI this editor has asked for, so they can be released when it closes.
+    seen: HashSet<String>,
 }
 
 impl ImageGuard {
-    /// Check a `file://` URI (other URIs pass). Costs one `stat` per call on a cache hit.
-    pub fn check_uri(&mut self, uri: &str) -> Result<(), String> {
+    /// Check a `file://` URI (other URIs pass), dropping what the loaders hold of it if the file
+    /// changed. Costs one `stat` per call on a cache hit.
+    pub fn check_uri(&mut self, ctx: &egui::Context, uri: &str, max_side: u32) -> Result<(), String> {
+        if !self.seen.contains(uri) {
+            self.seen.insert(uri.to_owned());
+        }
         let Some(p) = uri.strip_prefix("file://") else { return Ok(()) };
-        self.check(Path::new(p))
+        let (r, changed) = self.check(Path::new(p), max_side);
+        if changed {
+            ctx.forget_image(uri);
+        }
+        r
     }
 
-    pub fn check(&mut self, path: &Path) -> Result<(), String> {
+    /// The check result, and whether the file differs from the last time it was checked.
+    fn check(&mut self, path: &Path, max_side: u32) -> (Result<(), String>, bool) {
         let meta = std::fs::metadata(path).ok();
         let key = (meta.as_ref().and_then(|m| m.modified().ok()), meta.as_ref().map_or(0, |m| m.len()));
-        if let Some((mt, len, r)) = self.cache.get(path)
-            && (*mt, *len) == key
-        {
-            return r.clone();
+        let mut changed = false;
+        if let Some((mt, len, side, r)) = self.cache.get(path) {
+            changed = (*mt, *len) != key;
+            if !changed && *side == max_side {
+                return (r.clone(), false);
+            }
         }
-        let r = check_local(path);
+        let r = check_local(path, max_side);
         if self.cache.len() > 1000 {
             self.cache.clear();
         }
-        self.cache.insert(path.to_path_buf(), (key.0, key.1, r.clone()));
-        r
+        self.cache.insert(path.to_path_buf(), (key.0, key.1, max_side, r.clone()));
+        (r, changed)
+    }
+
+    pub fn seen(&self) -> impl Iterator<Item = &str> {
+        self.seen.iter().map(String::as_str)
+    }
+
+    pub fn has_seen(&self, uri: &str) -> bool {
+        self.seen.contains(uri)
     }
 }
 
@@ -149,6 +190,8 @@ pub(crate) fn resolve(url: &str, base_dir: Option<&Path>, remote: bool) -> Image
 mod tests {
     use super::*;
 
+    const SIDE: u32 = MAX_IMAGE_SIDE;
+
     /// A minimal PNG (signature + IHDR only) claiming the given dimensions.
     fn png_header(w: u32, h: u32) -> Vec<u8> {
         let mut v = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
@@ -181,48 +224,82 @@ mod tests {
 
     #[test]
     fn rejects_devices_fifos_and_bombs() {
-        assert_eq!(check_local(Path::new("/dev/zero")), Err("not a file".into()));
+        assert_eq!(check_local(Path::new("/dev/zero"), SIDE), Err("not a file".into()));
         let dir = tempfile::tempdir().expect("tempdir");
         let d = dir.path();
-        assert_eq!(check_local(d), Err("not a file".into()));
-        assert!(check_local(&d.join("missing.png")).is_err());
+        assert_eq!(check_local(d, SIDE), Err("not a file".into()));
+        assert!(check_local(&d.join("missing.png"), SIDE).is_err());
 
         let fifo = d.join("fifo.png");
         let made = std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success());
         if made {
-            assert_eq!(check_local(&fifo), Err("not a file".into()), "must not block on a FIFO");
+            assert_eq!(check_local(&fifo, SIDE), Err("not a file".into()), "must not block on a FIFO");
         }
 
         let big = d.join("big.png");
         let f = std::fs::File::create(&big).expect("create");
         f.set_len(MAX_IMAGE_BYTES + 1).expect("set_len");
-        assert_eq!(check_local(&big), Err("too large".into()));
+        assert_eq!(check_local(&big, SIDE), Err("too large".into()));
 
         let huge = d.join("huge.png");
         std::fs::write(&huge, png_header(60_000, 60_000)).expect("write");
-        assert!(check_local(&huge).is_err_and(|e| e.contains("60000")), "{:?}", check_local(&huge));
+        assert!(check_local(&huge, SIDE).is_err_and(|e| e.contains("60000")), "{:?}", check_local(&huge, SIDE));
 
         let ok = d.join("ok.png");
         std::fs::write(&ok, png_header(100, 50)).expect("write");
-        assert_eq!(check_local(&ok), Ok(()));
+        assert_eq!(check_local(&ok, SIDE), Ok(()));
 
         let svg = d.join("bomb.svg");
         std::fs::write(&svg, r#"<svg width="60000" height="60000"></svg>"#).expect("write");
-        assert_eq!(check_local(&svg), Ok(()), "SVG allowed; rasterized at display size");
+        assert_eq!(check_local(&svg, SIDE), Ok(()), "SVG allowed; rasterized at display size");
         let svg2 = d.join("noext");
         std::fs::write(&svg2, r#"<svg xmlns="http://www.w3.org/2000/svg"></svg>"#).expect("write");
-        assert_eq!(check_local(&svg2), Ok(()));
+        assert_eq!(check_local(&svg2, SIDE), Ok(()));
         let junk = d.join("junk.png");
         std::fs::write(&junk, b"not an image").expect("write");
-        assert!(check_local(&junk).is_err());
+        assert!(check_local(&junk, SIDE).is_err());
 
         // Guard caches and re-checks when the file changes.
+        let ctx = egui::Context::default();
         let mut g = ImageGuard::default();
-        assert_eq!(g.check_uri(&format!("file://{}", ok.display())), Ok(()));
+        assert_eq!(g.check_uri(&ctx, &format!("file://{}", ok.display()), SIDE), Ok(()));
         std::fs::write(&ok, png_header(9000, 10)).expect("write");
-        assert!(g.check_uri(&format!("file://{}", ok.display())).is_err());
-        assert_eq!(g.check_uri("https://e.com/x.png"), Ok(()));
-        assert_eq!(g.check_uri("file:///dev/zero"), Err("not a file".into()));
+        assert!(g.check_uri(&ctx, &format!("file://{}", ok.display()), SIDE).is_err());
+        assert_eq!(g.check_uri(&ctx, "https://e.com/x.png", SIDE), Ok(()));
+        assert_eq!(g.check_uri(&ctx, "file:///dev/zero", SIDE), Err("not a file".into()));
+    }
+
+    #[test]
+    fn side_limit_follows_the_gpu() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let png = dir.path().join("a.png");
+        std::fs::write(&png, png_header(3000, 10)).expect("write");
+        assert_eq!(check_local(&png, 4096), Ok(()));
+        assert!(check_local(&png, 2048).is_err_and(|e| e.contains("too large")));
+
+        // The cached verdict is only good for the limit it was checked against.
+        let mut g = ImageGuard::default();
+        assert_eq!(g.check(&png, 4096), (Ok(()), false));
+        let (r, changed) = g.check(&png, 2048);
+        assert!(r.is_err_and(|e| e.contains("too large")));
+        assert!(!changed, "a new limit is not a changed file");
+        assert_eq!(g.check(&png, 4096), (Ok(()), false));
+
+        let ctx = egui::Context::default();
+        assert_eq!(max_side(&ctx), 2048, "egui's default until the backend reports");
+        ctx.input_mut(|i| i.max_texture_side = 1 << 20);
+        assert_eq!(max_side(&ctx), MAX_IMAGE_SIDE);
+    }
+
+    #[test]
+    fn svg_sniff_reads_only_the_head() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let late = dir.path().join("late");
+        std::fs::write(&late, format!("{}<svg></svg>", " ".repeat(600))).expect("write");
+        assert_eq!(check_local(&late, SIDE), Err("unsupported format".into()));
+        let early = dir.path().join("early");
+        std::fs::write(&early, format!("<svg>{}</svg>", " ".repeat(600))).expect("write");
+        assert_eq!(check_local(&early, SIDE), Ok(()));
     }
 
     #[test]

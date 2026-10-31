@@ -90,6 +90,7 @@ impl MdApp {
     pub fn new(cc: &eframe::CreationContext<'_>, targets: StartupTargets) -> Self {
         let ctx = &cc.egui_ctx;
         egui_extras::install_image_loaders(ctx);
+        crate::svg_loader::install(ctx);
         ctx.set_fonts(crate::fonts::system_font_definitions());
         std::thread::spawn(Highlighter::preload);
 
@@ -297,6 +298,7 @@ impl MdApp {
     fn close_tab_now(&mut self, id: u64) {
         let Some(idx) = self.tab_index(id) else { return };
         let tab = self.tabs.remove(idx);
+        tab.editor.release_images(&self.ctx, self.tabs.iter().map(|t| &t.editor));
         if let Err(e) = recovery::remove(&tab.recovery_id) {
             log::debug!("recovery remove {}: {e}", tab.recovery_id);
         }

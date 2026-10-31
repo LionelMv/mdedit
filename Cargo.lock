@@ -2366,6 +2366,7 @@ dependencies = [
  "mdedit-workspace",
  "open",
  "regex",
+ "resvg",
  "rfd",
  "tempfile",
  "winit",

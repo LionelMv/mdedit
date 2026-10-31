@@ -793,3 +793,296 @@ fn switching_tabs_keeps_scroll_position() {
     let after = h.ed.anchor_offset();
     assert!((before - after).abs() < 2.0, "scroll kept: {before} -> {after}");
 }
+
+/// The whole model, compared with a rebuild from scratch.
+fn assert_model_matches_rebuild(ed: &mut EditorState, doc: &Document, what: &str) {
+    let text = doc.buffer.text();
+    assert_eq!(ed.model.text, text, "{what}: text");
+    let blocks = mdedit_syntax::parse(&text);
+    let valid = ed.model.valid_blocks;
+    assert_eq!(ed.model.blocks.len(), blocks.len(), "{what}: block count");
+    assert!(ed.model.blocks[..valid] == blocks[..valid], "{what}: valid blocks differ from a full parse");
+    assert!(ed.model.has_definitions || !mdedit_syntax::may_have_definition(&text), "{what}: definitions");
+    assert!(ed.model.all_blocks() == blocks, "{what}: blocks differ from a full parse");
+    let chunks = model::build_chunks(&text, &blocks);
+    if ed.model.chunks != chunks {
+        let i = ed.model.chunks.iter().zip(&chunks).position(|(a, b)| a != b);
+        panic!("{what}: chunks differ at {i:?} ({} vs {}): {:?} vs {:?}", ed.model.chunks.len(), chunks.len(), i.map(|i| &ed.model.chunks[i]), i.map(|i| &chunks[i]));
+    }
+    assert_eq!(ed.model.hashes.len(), chunks.len(), "{what}: hashes");
+    assert_eq!(ed.heights.len(), chunks.len(), "{what}: heights");
+    for (i, h) in ed.model.hashes.iter().enumerate() {
+        if let Some(h) = h {
+            assert_eq!(*h, model::hash_str(&text[chunks[i].range.clone()]), "{what}: hash {i}");
+        }
+    }
+}
+
+/// Over `MIN_INCREMENTAL`, with every kind of block, nested code, an oversized block, and
+/// definitions.
+fn varied_doc(defs: bool) -> String {
+    let mut s = String::from("\n\n");
+    for i in 0..220 {
+        s += &format!("## Section {i}\n\nSome **bold** `code` [link](http://x/{i}) é.\nSetext?\n\n- a\n- [ ] b\n  - c\n\n1. Step:\n\n   ```bash\n   echo {i}\n   ```\n\n2. Next\n\n> quote {i}\n>\n> ```rust\n> let a = {i};\n> ```\n\n| A | B |\n|---|---|\n| {i} | x |\n\n---\n\n<div>{i}</div>\n\n$$\nx^{i}\n$$\n\n");
+    }
+    s += "```rust\n";
+    for i in 0..3000 {
+        s += &format!("let v{i} = {i};\n");
+    }
+    s += "```\n\nend paragraph\n";
+    if defs {
+        s = format!("Use [foo] and [^n] now.\n\n{s}\n[foo]: http://x \"t\"\n\n[^n]: note\n");
+    }
+    s
+}
+
+#[test]
+fn sync_updates_only_around_the_edit() {
+    let src = varied_doc(false);
+    let mut doc = Document::new();
+    doc.buffer = Buffer::new(&src);
+    let mut ed = EditorState::new();
+    ed.sync(&doc);
+    let n = ed.model.chunks.len();
+    for i in 0..n {
+        ed.model.chunk_hash(i);
+    }
+    let at = src.len() / 3;
+    let at = at + src[at..].find("Setext").unwrap();
+    doc.buffer.apply(vec![Edit::insert(at, "x")], Selection::caret(at + 1), EditKind::Typing);
+    ed.sync(&doc);
+    assert_model_matches_rebuild(&mut ed, &doc, "typing");
+    let unknown = ed.model.hashes.iter().filter(|h| h.is_none()).count();
+    let first = ed.model.hashes.iter().position(|h| h.is_none());
+    let last = ed.model.hashes.iter().rposition(|h| h.is_none());
+    assert!(unknown < 40, "only chunks around the edit were rebuilt, not {unknown} of {n} ({first:?}..{last:?}), blocks {}, at {at} of {}", ed.model.blocks.len(), src.len());
+}
+
+#[test]
+fn sync_matches_rebuild_for_undo_and_replacing_everything() {
+    let src = varied_doc(true);
+    let mut doc = Document::new();
+    doc.buffer = Buffer::new(&src);
+    let mut ed = EditorState::new();
+    ed.sync(&doc);
+    let at = src.find("Setext").unwrap();
+    doc.buffer.apply(vec![Edit::insert(at, "```\n")], Selection::caret(at), EditKind::Other);
+    ed.sync(&doc);
+    assert_model_matches_rebuild(&mut ed, &doc, "open fence");
+    assert!(doc.buffer.undo());
+    ed.sync(&doc);
+    assert_model_matches_rebuild(&mut ed, &doc, "undo");
+    doc.buffer.set_text("short\n");
+    ed.sync(&doc);
+    assert_model_matches_rebuild(&mut ed, &doc, "short");
+    doc.buffer.set_text("");
+    ed.sync(&doc);
+    assert_model_matches_rebuild(&mut ed, &doc, "empty");
+    doc.buffer.set_text(&src);
+    ed.sync(&doc);
+    assert_model_matches_rebuild(&mut ed, &doc, "big again");
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(48))]
+    #[test]
+    fn incremental_sync_equals_full_rebuild(
+        defs in proptest::bool::ANY,
+        edits in proptest::collection::vec(
+            (0.0f64..1.0, 0usize..60, "[a-z#*`>\\-|\\[\\]:^ é\n]{0,10}|```\n|\n\n|- |> |    |---\n|\\[foo\\]: /u\n"),
+            1..6,
+        ),
+        flush_each in proptest::bool::ANY,
+    ) {
+        let src = varied_doc(defs);
+        let mut doc = Document::new();
+        doc.buffer = Buffer::new(&src);
+        let mut ed = EditorState::new();
+        ed.sync(&doc);
+        for (frac, del, ins) in edits {
+            let len = doc.buffer.len_bytes();
+            let a = doc.buffer.clamp_offset((len as f64 * frac) as usize);
+            let b = doc.buffer.clamp_offset(a + del);
+            doc.buffer.apply(vec![Edit::replace(a..b, ins.as_str())], Selection::caret(a), EditKind::Other);
+            ed.sync(&doc);
+            if flush_each {
+                assert_model_matches_rebuild(&mut ed, &doc, &format!("{a}..{b} -> {ins:?}"));
+            }
+        }
+        assert_model_matches_rebuild(&mut ed, &doc, "after all edits");
+    }
+}
+
+#[test]
+fn code_chunk_is_relaid_when_its_highlight_arrives() {
+    let colours = |h: &mut H| -> usize {
+        let env = Env { ctx: h.ctx.clone(), theme: &h.theme, hl: &h.hl, base_dir: None };
+        let laid = h.ed.laid(&env, 0, false);
+        laid.galley.job.sections.iter().map(|s| s.format.color).collect::<std::collections::HashSet<_>>().len()
+    };
+    let mut h = H::new("```rust\nfn main() { let x = 1; }\n```\n\nafter\n");
+    assert!(h.hl.wait_idle(std::time::Duration::from_secs(60)));
+    assert!(h.hl.has_waker(), "show registers a repaint request");
+    h.frame(vec![]);
+    assert!(colours(&mut h) >= 2, "highlighted once the result is in");
+    // Editing shows at once; the new result is relaid under the same key.
+    h.ed.request_focus = true;
+    h.doc.buffer.selection = Selection::caret(12);
+    h.frame(vec![]);
+    h.typ("x");
+    assert!(h.hl.wait_idle(std::time::Duration::from_secs(60)));
+    h.frame(vec![]);
+    assert!(colours(&mut h) >= 2);
+    h.frame(vec![]);
+    assert_eq!(h.ed.frame_stats().layouts, 0, "settled: no layouts without a new result");
+}
+
+/// Hands out a blank image of a fixed size for any `https://` URI and records `forget` calls.
+#[derive(Default)]
+struct FakeLoader {
+    side: usize,
+    forgotten: egui::mutex::Mutex<Vec<String>>,
+}
+
+impl egui::load::ImageLoader for FakeLoader {
+    fn id(&self) -> &'static str {
+        "FakeLoader"
+    }
+    fn load(&self, _: &egui::Context, uri: &str, _: egui::SizeHint) -> egui::load::ImageLoadResult {
+        if !uri.starts_with("https://") {
+            return Err(egui::load::LoadError::NotSupported);
+        }
+        let image = egui::ColorImage::filled([self.side, 1], Color32::WHITE);
+        Ok(egui::load::ImagePoll::Ready { image: Arc::new(image) })
+    }
+    fn forget(&self, uri: &str) {
+        self.forgotten.lock().push(uri.to_owned());
+    }
+    fn forget_all(&self) {}
+    fn byte_size(&self) -> usize {
+        0
+    }
+}
+
+fn image_slots_of(h: &mut H) -> Vec<ImageSlot> {
+    let env = Env { ctx: h.ctx.clone(), theme: &h.theme, hl: &h.hl, base_dir: None };
+    let text = h.doc.buffer.text();
+    let i = h.ed.model.chunks.iter().position(|c| text[c.range.clone()].contains("![")).expect("image chunk");
+    h.ed.geom(&env, Selection::caret(text.len()), i).images
+}
+
+fn set_max_texture_side(ctx: &egui::Context, side: usize) {
+    ctx.input_mut(|i| i.max_texture_side = side);
+}
+
+#[test]
+fn image_over_gpu_limit_gets_placeholder() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let png = dir.path().join("wide.png");
+    image::RgbaImage::new(3000, 1).save(&png).expect("save");
+    let mut h = H::new(&format!("x\n\n![p]({})\n\ntail\n", png.display()));
+    set_max_texture_side(&h.ctx, 2048);
+    let slots = image_slots_of(&mut h);
+    assert!(slots[0].texture.is_none() && slots[0].label.contains("too large"), "{}", slots[0].label);
+    // A GPU that can take it: the cached verdict must not stick.
+    set_max_texture_side(&h.ctx, 4096);
+    assert!(!image_slots_of(&mut h)[0].label.contains("too large"));
+}
+
+#[test]
+fn remote_image_over_gpu_limit_gets_placeholder() {
+    let mut h = H::new("x\n\n![p](https://e.com/wide.png)\n\ntail\n");
+    h.ed.remote_images = true;
+    h.ctx.add_image_loader(Arc::new(FakeLoader { side: 3000, ..Default::default() }));
+    set_max_texture_side(&h.ctx, 2048);
+    let slots = image_slots_of(&mut h);
+    assert!(slots[0].texture.is_none() && slots[0].label.contains("too large"), "{}", slots[0].label);
+}
+
+#[test]
+fn svg_hint_stays_under_gpu_limit() {
+    struct Spy(Arc<egui::mutex::Mutex<Vec<egui::SizeHint>>>);
+    impl egui::load::ImageLoader for Spy {
+        fn id(&self) -> &'static str {
+            "Spy"
+        }
+        fn load(&self, _: &egui::Context, _: &str, hint: egui::SizeHint) -> egui::load::ImageLoadResult {
+            self.0.lock().push(hint);
+            Ok(egui::load::ImagePoll::Pending { size: None })
+        }
+        fn forget(&self, _: &str) {}
+        fn forget_all(&self) {}
+        fn byte_size(&self) -> usize {
+            0
+        }
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let svg = dir.path().join("a.svg");
+    std::fs::write(&svg, r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"></svg>"#).expect("write");
+    let hints = Arc::new(egui::mutex::Mutex::new(Vec::new()));
+    let mut h = H::new(&format!("x\n\n![p]({})\n\ntail\n", svg.display()));
+    h.ctx.add_image_loader(Arc::new(Spy(hints.clone())));
+    h.ed.col_w = 4000.0;
+    set_max_texture_side(&h.ctx, 1024);
+    image_slots_of(&mut h);
+    let seen = hints.lock();
+    assert!(seen.contains(&egui::SizeHint::Size { width: 1024, height: 1024, maintain_aspect_ratio: true }), "{seen:?}");
+}
+
+#[test]
+fn closing_releases_images_no_other_tab_uses() {
+    let (shared, own) = ("https://e.com/shared.png", "https://e.com/own.png");
+    let mut a = H::new(&format!("![s]({shared})\n\n![o]({own})\n"));
+    let loader = Arc::new(FakeLoader { side: 4, ..Default::default() });
+    a.ctx.add_image_loader(loader.clone());
+    a.ed.remote_images = true;
+    a.frame(vec![]);
+    let ctx = a.ctx.clone();
+    let mut b = H::new(&format!("![s]({shared})\n"));
+    b.ctx = ctx.clone();
+    b.ed.remote_images = true;
+    b.frame(vec![]);
+
+    a.ed.release_images(&ctx, std::iter::once(&b.ed));
+    assert_eq!(*loader.forgotten.lock(), [own], "the other tab still shows the shared image");
+    loader.forgotten.lock().clear();
+    b.ed.release_images(&ctx, std::iter::empty());
+    assert_eq!(*loader.forgotten.lock(), [shared]);
+}
+
+#[test]
+fn changed_file_is_forgotten() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let png = dir.path().join("a.png");
+    image::RgbaImage::new(2, 2).save(&png).expect("save");
+    let mut h = H::new(&format!("x\n\n![p]({})\n", png.display()));
+    let loader = Arc::new(FakeLoader { side: 4, ..Default::default() });
+    h.ctx.add_image_loader(loader.clone());
+    h.frame(vec![]);
+    assert!(loader.forgotten.lock().is_empty(), "unchanged");
+    image::RgbaImage::new(3, 3).save(&png).expect("save");
+    h.frame(vec![]);
+    assert_eq!(*loader.forgotten.lock(), [format!("file://{}", png.display())]);
+    h.frame(vec![]);
+    assert_eq!(loader.forgotten.lock().len(), 1, "forgotten once per change");
+}
+
+#[test]
+fn editing_a_definition_updates_the_link_elsewhere() {
+    let urls = |h: &mut H| -> Vec<String> {
+        let env = Env { ctx: h.ctx.clone(), theme: &h.theme, hl: &h.hl, base_dir: None };
+        let sel = h.doc.buffer.selection;
+        let g = h.ed.geom(&env, sel, 0);
+        g.laid.decorations.iter().filter_map(|d| match d { Decoration::Link { url, .. } => Some(url.clone()), _ => None }).collect()
+    };
+    for filler in ["other\n\n".to_string(), "para text here.\n\n".repeat(5000)] {
+        let mut h = H::new(&format!("[foo] x\n\n{filler}[foo]: http://old\n"));
+        let end = h.text().find("http://old").unwrap() + 10;
+        h.set_caret(9);
+        h.frame(vec![]);
+        assert_eq!(urls(&mut h), ["http://old"]);
+        h.doc.buffer.apply(vec![Edit::insert(end, "NEW")], Selection::caret(9), EditKind::Other);
+        h.frame(vec![]);
+        assert_eq!(urls(&mut h), ["http://oldNEW"]);
+    }
+}

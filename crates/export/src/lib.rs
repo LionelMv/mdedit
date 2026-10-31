@@ -198,7 +198,241 @@ pub fn sanitize_html(html: &str) -> String {
             }
             _ => Some(Cow::Borrowed(value)),
         });
-    b.clean(html).to_string()
+    b.clean(&limit_html_depth(html)).to_string()
+}
+
+/// Deepest element nesting passed to the sanitizer; see [`limit_html_depth`]. Well above
+/// what the renderer emits for `mdedit_syntax::MAX_NEST` containers and for real raw HTML.
+const MAX_HTML_DEPTH: usize = 256;
+
+/// Delete the tags (never the text) nested deeper than [`MAX_HTML_DEPTH`], and their end tags.
+///
+/// html5ever walks the stack of open elements for nearly every tag, so sanitizing takes time
+/// quadratic in the nesting depth: 1 MB of `<div>` takes minutes. Bounding the stack makes it
+/// linear. Input that stays under the limit is returned untouched.
+///
+/// This isn't a security boundary, since ammonia still parses whatever comes out. It only has
+/// to bound the depth html5ever will reach, so whenever the HTML parsing rules are subtle the
+/// model errs towards counting too deep: an end tag only pops what it surely pops in the real
+/// parser (a misnested `</span>` closes nothing), and text in attributes and comments may
+/// open elements but not close ones opened outside it, because a raw-text element can make
+/// html5ever read it as markup. The cost of erring is flattening a document with hundreds of
+/// unclosed elements. Every scan is bounded by the limit or moves forward, so this is linear.
+fn limit_html_depth(html: &str) -> Cow<'_, str> {
+    let b = html.as_bytes();
+    let mut stack: Vec<String> = Vec::new();
+    let mut dropped: HashMap<String, usize> = HashMap::new();
+    let (mut out, mut copied) = (String::new(), 0);
+    // inside an attribute section or comment: no popping below `floor` until `region_end`
+    let (mut floor, mut region_end) = (0, 0);
+    let mut i = 0;
+    while let Some(off) = html[i..].find('<') {
+        let lt = i + off;
+        let in_region = lt < region_end;
+        if !in_region {
+            floor = 0;
+        }
+        let close = b.get(lt + 1) == Some(&b'/');
+        let name_start = lt + 1 + usize::from(close);
+        if !b.get(name_start).is_some_and(u8::is_ascii_alphabetic) {
+            if !in_region && (close || matches!(b.get(lt + 1), Some(b'!' | b'?'))) {
+                floor = stack.len();
+                region_end = markup_comment_end(html, lt);
+            }
+            i = lt + 1;
+            continue;
+        }
+        let name_len = b[name_start..].iter().position(|c| matches!(c, b' ' | b'\t' | b'\r' | b'\n' | 0x0c | b'/' | b'>'));
+        let name_end = name_len.map_or(b.len(), |n| name_start + n);
+        let name = html[name_start..name_end].to_ascii_lowercase();
+        // not in a region: its bytes are scanned once as a tag, once as region text
+        let tag_end = if in_region { 0 } else { tag_end(b, name_end) };
+        let keep = if close {
+            match dropped.get_mut(&name) {
+                Some(n) if *n > 0 => {
+                    *n -= 1;
+                    false
+                }
+                _ => {
+                    pop_closed(&mut stack, floor, &name);
+                    true
+                }
+            }
+        } else {
+            pop_implied(&mut stack, floor, &name);
+            // void elements only nest in foreign content, where they aren't void
+            if is_void(&name) && !stack.iter().any(|s| s == "svg" || s == "math") {
+                true
+            } else if stack.len() < MAX_HTML_DEPTH {
+                stack.push(name);
+                true
+            } else {
+                *dropped.entry(name).or_insert(0) += 1;
+                false
+            }
+        };
+        if keep {
+            if !in_region {
+                floor = stack.len();
+                region_end = tag_end;
+            }
+            i = name_end;
+        } else {
+            // in a region the tag may not be a real one: stop at the first `>` regardless
+            let end = if in_region { html[lt..].find('>').map_or(html.len(), |n| lt + n + 1) } else { tag_end };
+            out.push_str(&html[copied..lt]);
+            copied = end;
+            i = end;
+        }
+    }
+    if copied == 0 {
+        return Cow::Borrowed(html);
+    }
+    out.push_str(&html[copied..]);
+    Cow::Owned(out)
+}
+
+/// End of the comment or bogus comment (`<!…>`, `<?…>`, `</ …>`) at `lt`.
+fn markup_comment_end(html: &str, lt: usize) -> usize {
+    let rest = &html[lt..];
+    let Some(c) = rest.strip_prefix("<!--") else {
+        return rest.find('>').map_or(html.len(), |n| lt + n + 1);
+    };
+    if c.starts_with('>') {
+        return lt + 5;
+    }
+    if c.starts_with("->") {
+        return lt + 6;
+    }
+    let mut from = 0;
+    while let Some(n) = c[from..].find("--") {
+        let p = from + n + 2;
+        if c[p..].starts_with('>') {
+            return lt + 4 + p + 1;
+        }
+        if c[p..].starts_with("!>") {
+            return lt + 4 + p + 2;
+        }
+        from = p - 1;
+    }
+    html.len()
+}
+
+/// End (past the `>`) of the tag whose name ends at `i`, following the HTML tokenizer's rules
+/// for attributes; `b.len()` if it never ends.
+fn tag_end(b: &[u8], mut i: usize) -> usize {
+    let is_ws = |c: u8| matches!(c, b' ' | b'\t' | b'\r' | b'\n' | 0x0c);
+    let mut in_name = false; // in an attribute name, where `=` starts the value
+    while let Some(&c) = b.get(i) {
+        match c {
+            b'>' => return i + 1,
+            b'/' => in_name = false,
+            b'=' if in_name => {
+                i += 1;
+                while b.get(i).copied().is_some_and(is_ws) {
+                    i += 1;
+                }
+                match b.get(i) {
+                    Some(&q @ (b'"' | b'\'')) => match b[i + 1..].iter().position(|&x| x == q) {
+                        Some(n) => i += n + 2,
+                        None => return b.len(),
+                    },
+                    Some(b'>') | None => continue,
+                    Some(_) => {
+                        while b.get(i).is_some_and(|&x| !is_ws(x) && x != b'>') {
+                            i += 1;
+                        }
+                    }
+                }
+                in_name = false;
+                continue;
+            }
+            c if is_ws(c) => {}
+            _ => in_name = true,
+        }
+        i += 1;
+    }
+    b.len()
+}
+
+fn is_void(name: &str) -> bool {
+    matches!(
+        name,
+        "area" | "base" | "basefont" | "bgsound" | "br" | "col" | "embed" | "frame" | "hr" | "img" | "input"
+            | "keygen" | "link" | "meta" | "param" | "source" | "track" | "wbr"
+    )
+}
+
+/// Elements whose end tag closes everything open inside them, and whose start tag closes a `p`.
+fn is_block(name: &str) -> bool {
+    matches!(
+        name,
+        "address" | "article" | "aside" | "blockquote" | "center" | "details" | "dialog" | "dir" | "div" | "dl"
+            | "dd" | "dt" | "fieldset" | "figcaption" | "figure" | "footer" | "h1" | "h2" | "h3" | "h4" | "h5"
+            | "h6" | "header" | "hgroup" | "li" | "listing" | "main" | "menu" | "nav" | "ol" | "p" | "pre"
+            | "search" | "section" | "summary" | "ul"
+    )
+}
+
+/// Elements a block's end tag can't close past: scope boundaries (their contents don't see
+/// outer end tags), and formatting elements (the parser reopens them after the block).
+fn stops_block_end(name: &str) -> bool {
+    matches!(
+        name,
+        "applet" | "button" | "caption" | "marquee" | "object" | "select" | "table" | "td" | "template" | "th"
+            | "annotation-xml" | "desc" | "foreignobject" | "mi" | "mn" | "mo" | "ms" | "mtext" | "title"
+            | "a" | "b" | "big" | "code" | "em" | "font" | "i" | "nobr" | "s" | "small" | "strike" | "strong"
+            | "tt" | "u"
+    )
+}
+
+/// Apply the end tag `name` to the open elements above `floor`.
+fn pop_closed(stack: &mut Vec<String>, floor: usize, name: &str) {
+    let table_part = matches!(name, "table" | "tbody" | "thead" | "tfoot" | "tr" | "td" | "th" | "caption");
+    let mut j = stack.len();
+    while j > floor {
+        j -= 1;
+        let s = stack[j].as_str();
+        if s == name {
+            stack.truncate(j);
+            return;
+        }
+        let passes = if table_part {
+            s != "table" && s != "template"
+        } else {
+            is_block(name) && !stops_block_end(s) && !(name == "li" && matches!(s, "ul" | "ol"))
+        };
+        if !passes {
+            return;
+        }
+    }
+}
+
+/// Close what the start tag `name` implicitly ends, when it is directly on top of the stack.
+fn pop_implied(stack: &mut Vec<String>, floor: usize, name: &str) {
+    let table_rank = |n: &str| match n {
+        "td" | "th" => 1,
+        "tr" => 2,
+        "tbody" | "thead" | "tfoot" | "caption" | "colgroup" => 3,
+        _ => 0,
+    };
+    let rank = table_rank(name);
+    while stack.len() > floor {
+        let top = stack[stack.len() - 1].as_str();
+        let ends = match name {
+            _ if top == "p" => is_block(name) || name == "table",
+            "li" => top == "li",
+            "dd" | "dt" => matches!(top, "dd" | "dt"),
+            "option" => top == "option",
+            "optgroup" => matches!(top, "option" | "optgroup"),
+            "rp" | "rt" => matches!(top, "rp" | "rt"),
+            _ => (1..=rank).contains(&table_rank(top)),
+        };
+        if !ends {
+            return;
+        }
+        stack.pop();
+    }
 }
 
 // ---------------------------------------------------------------------------------------

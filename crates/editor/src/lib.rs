@@ -723,6 +723,16 @@ impl EditorState {
         ChunkGeom { laid, images, height }
     }
 
+    /// Free the images this editor loaded that none of `others` uses. For when it closes;
+    /// textures painted this frame stay valid, as egui frees them after painting. Added API.
+    pub fn release_images<'a>(&self, ctx: &egui::Context, others: impl Iterator<Item = &'a EditorState> + Clone) {
+        for uri in self.image_guard.borrow().seen() {
+            if !others.clone().any(|o| o.image_guard.borrow().has_seen(uri)) {
+                ctx.forget_image(uri);
+            }
+        }
+    }
+
     fn image_slots(&self, env: &Env<'_>, i: usize, laid: &Laid) -> Vec<ImageSlot> {
         let mut out = Vec::new();
         let c = &self.model.chunks[i];
@@ -735,12 +745,14 @@ impl EditorState {
             let (size, texture, label) = match images::resolve(url, env.base_dir, self.remote_images) {
                 images::ImageSource::Uri(uri) => {
                     // Rasterize vector images at display size (SVG bombs) and cap height.
+                    let side = images::max_side(&env.ctx);
                     let hint = egui::SizeHint::Size {
-                        width: ((max_w * env.ctx.pixels_per_point()) as u32).clamp(16, 8192),
-                        height: 4096,
+                        width: ((max_w * env.ctx.pixels_per_point()) as u32).clamp(16, side),
+                        height: side.min(4096),
                         maintain_aspect_ratio: true,
                     };
-                    let checked = self.image_guard.borrow_mut().check_uri(&uri);
+                    let checked = self.image_guard.borrow_mut().check_uri(&env.ctx, &uri, side);
+                    let checked = checked.and_then(|()| images::check_decoded(&env.ctx, &uri, hint, side));
                     match checked.map(|()| env.ctx.try_load_texture(&uri, egui::TextureOptions::LINEAR, hint)) {
                         Err(why) => (vec2(max_w, IMAGE_PLACEHOLDER_H), None, format!("{label} ({why})")),
                         Ok(r) => match r {

@@ -10,6 +10,7 @@ mod menu;
 mod prefs;
 mod sidebar;
 mod single;
+mod svg_loader;
 mod tabs;
 mod theme;
 mod toast;
