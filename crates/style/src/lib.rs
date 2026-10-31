@@ -41,7 +41,7 @@ use std::ops::Range;
 
 use egui::text::LayoutJob;
 use egui::{Color32, FontFamily, FontId, Stroke, TextFormat};
-use mdedit_highlight::{HlTheme, Highlighter};
+use mdedit_highlight::{HlTheme, Highlight, Highlighter};
 use mdedit_syntax::{Block, BlockKind, Span, SpanKind};
 
 /// Font size used for hidden markers.
@@ -214,13 +214,7 @@ pub fn chunks(text: &str, blocks: &[Block]) -> Vec<Chunk> {
     if text.is_empty() {
         return vec![Chunk { range: 0..0, block: None }];
     }
-    let mut starts: Vec<(usize, Option<usize>)> = Vec::with_capacity(blocks.len() + 1);
-    for (i, b) in blocks.iter().enumerate() {
-        let s = line_start(text, b.range.start);
-        if starts.last().is_none_or(|&(p, _)| s > p) {
-            starts.push((s, Some(i)));
-        }
-    }
+    let mut starts = block_starts(text, blocks, 0..blocks.len());
     if starts.is_empty() {
         starts = blank_line_split(text);
     }
@@ -230,6 +224,31 @@ pub fn chunks(text: &str, blocks: &[Block]) -> Vec<Chunk> {
     let mut out = Vec::with_capacity(starts.len());
     for (k, &(s, block)) in starts.iter().enumerate() {
         let e = starts.get(k + 1).map_or(text.len(), |n| n.0);
+        out.push(Chunk { range: s..e, block });
+    }
+    out
+}
+
+/// Chunk starts of `blocks[which]`; `which.start` must not join the chunk of the block before it.
+fn block_starts(text: &str, blocks: &[Block], which: Range<usize>) -> Vec<(usize, Option<usize>)> {
+    let mut starts: Vec<(usize, Option<usize>)> = Vec::with_capacity(which.len() + 1);
+    for i in which {
+        let s = line_start(text, blocks[i].range.start);
+        if starts.last().is_none_or(|&(p, _)| s > p) {
+            starts.push((s, Some(i)));
+        }
+    }
+    starts
+}
+
+/// The part of [`chunks`] for `blocks[which]`, the last chunk ending at `end`: what an edit has
+/// to recompute. Same result as [`chunks`] if `which` starts and `end` lies on a chunk boundary.
+/// Does not add the leading `block: None` chunk.
+pub fn chunks_of_blocks(text: &str, blocks: &[Block], which: Range<usize>, end: usize) -> Vec<Chunk> {
+    let starts = block_starts(text, blocks, which);
+    let mut out = Vec::with_capacity(starts.len());
+    for (k, &(s, block)) in starts.iter().enumerate() {
+        let e = starts.get(k + 1).map_or(end, |n| n.0);
         out.push(Chunk { range: s..e, block });
     }
     out
@@ -291,6 +310,10 @@ pub struct StyledChunk {
     pub space_after: f32,
     /// Left indent in points applied to the whole galley (code cards use padding inside).
     pub indent: f32,
+    /// The result can change without the chunk's text changing, once
+    /// [`Highlighter::generation`] moves on: highlighting was still pending, or the chunk is a
+    /// piece of a code block (whose colours depend on text in other pieces).
+    pub hl_volatile: bool,
 }
 
 /// Inputs for styling one chunk.
@@ -402,7 +425,7 @@ pub const MAX_INLINE_NEST: usize = 32;
 
 /// Indices of `spans` whose nesting depth (number of spans strictly containing them) is
 /// below [`MAX_INLINE_NEST`], in their original order. O(n log n).
-fn shallow_spans(spans: &[Span]) -> Vec<usize> {
+fn shallow_spans(spans: &[&Span]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..spans.len()).collect();
     order.sort_by(|&a, &b| {
         let (ra, rb) = (&spans[a].range, &spans[b].range);
@@ -434,6 +457,7 @@ struct Ctx<'a> {
     show: bool,
     paint: Paint,
     decos: Vec<Decoration>,
+    hl_volatile: bool,
 }
 
 impl Ctx<'_> {
@@ -474,6 +498,15 @@ impl Ctx<'_> {
     /// decorations, which would otherwise be clamped to an empty range at the chunk edge.
     fn in_chunk(&self, abs: &Range<usize>) -> bool {
         abs.start < self.base + self.body.len() && abs.end > self.base
+    }
+
+    /// The blocks of `blocks` (sorted, as parsed) that overlap this chunk, by binary search:
+    /// styling a chunk must not cost the size of the list or quote around it.
+    fn in_chunk_blocks<'b>(&self, blocks: &'b [Block]) -> &'b [Block] {
+        let hi = self.base + self.body.len();
+        let first = blocks.partition_point(|c| c.range.end <= self.base);
+        let n = blocks[first..].partition_point(|c| c.range.start < hi);
+        &blocks[first..first + n]
     }
 
     fn byte(&self, abs: usize) -> Option<u8> {
@@ -544,8 +577,9 @@ impl Ctx<'_> {
             BlockKind::List { ordered, .. } => {
                 // Source indentation is hidden in live preview: the editor indents each item by
                 // its depth (so wrapped lines line up with the item's text).
-                let mut ls = line_start(self.text, b.range.start);
-                while ls < b.range.end.min(self.text.len()) {
+                let mut ls = line_start(self.text, b.range.start.max(self.base));
+                let stop = b.range.end.min(self.base + self.body.len());
+                while ls < stop {
                     let le = self.text[ls..].find('\n').map_or(self.text.len(), |p| ls + p);
                     let ws = self.text[ls..le].len() - self.text[ls..le].trim_start_matches([' ', '\t', '>']).len();
                     if ws > 0 && ws < le - ls {
@@ -554,7 +588,7 @@ impl Ctx<'_> {
                     ls = le + 1;
                 }
                 let nd = Depth { list: d.list.saturating_add(1), ..d };
-                for c in &b.children {
+                for c in self.in_chunk_blocks(&b.children) {
                     if let BlockKind::ListItem { .. } = c.kind {
                         self.list_item(c, *ordered, nd);
                     } else {
@@ -620,7 +654,7 @@ impl Ctx<'_> {
                 });
             }
         }
-        for c in &b.children {
+        for c in self.in_chunk_blocks(&b.children) {
             let nd = if matches!(b.kind, BlockKind::BlockQuote) {
                 Depth { quote: d.quote.saturating_add(1), ..d }
             } else {
@@ -636,7 +670,8 @@ impl Ctx<'_> {
         let bytes = self.text.as_bytes();
         let end = range.end.min(bytes.len());
         let mut line = line_start(self.text, range.start).max(self.base);
-        while line < end {
+        let stop = end.min(self.base + self.body.len());
+        while line < stop {
             let mut i = line;
             let mut n = 0u8;
             loop {
@@ -740,7 +775,7 @@ impl Ctx<'_> {
                 self.deco(Decoration::Checkbox { range: r, checked: *checked });
             }
         }
-        for c in &item.children {
+        for c in self.in_chunk_blocks(&item.children) {
             self.style_block(c, d);
         }
         self.inlines(&item.inlines);
@@ -798,8 +833,11 @@ impl Ctx<'_> {
             })
             .collect();
         let muted = t.muted;
-        let mut prev_end = content.start;
-        for l in &lines {
+        // Only the lines around this chunk: it can be one piece of a big block.
+        let (lo, hi) = (self.base, self.base + self.body.len());
+        let first_line = lines.partition_point(|l| l.end < lo);
+        let mut prev_end = if first_line > 0 { lines[first_line - 1].end.max(content.start) } else { content.start };
+        for l in &lines[first_line..] {
             if l.start > prev_end {
                 // Between the previous line's end and this line's start: newline + prefix.
                 self.apply(&(prev_end..l.start), |s| s.color = muted);
@@ -814,6 +852,9 @@ impl Ctx<'_> {
             // The code's own indentation stays, even though a list hides its lines' indentation.
             self.vis(l, Vis::Normal);
             prev_end = prev_end.max(l.end);
+            if l.start > hi {
+                break;
+            }
         }
         if !lang.is_empty() && !lines.is_empty() {
             let mut code = String::new();
@@ -827,9 +868,17 @@ impl Ctx<'_> {
                 code.push_str(&self.text[l.clone()]);
             }
             let theme = if t.dark { HlTheme::Dark } else { HlTheme::Light };
-            if let Some(spans) = self.hl.highlight_shared(&lang, &code, theme) {
-                let (lo, hi) = (self.base, self.base + self.body.len());
-                for sp in spans.iter() {
+            let answer = self.hl.highlight_nonblocking(&lang, &code, theme);
+            let piece = content.start < lo || content.end > hi;
+            self.hl_volatile |= piece || matches!(answer, Highlight::Pending(_));
+            if let Some(spans) = answer.spans() {
+                // Spans are sorted: skip to the ones on this chunk's lines.
+                let m0 = map.partition_point(|m| m.1 + m.2 <= lo);
+                let m1 = map.partition_point(|m| m.1 < hi);
+                let code_lo = map.get(m0).map_or(code.len(), |m| m.0);
+                let code_hi = if m1 > 0 { map[m1 - 1].0 + map[m1 - 1].2 } else { 0 };
+                let from = spans.partition_point(|s| s.range.end <= code_lo);
+                for sp in spans[from..].iter().take_while(|s| s.range.start < code_hi) {
                     // Lines containing the span (spans never cross a newline, but be safe).
                     let first = map.partition_point(|m| m.0 + m.2 <= sp.range.start);
                     for &(off, abs, len) in &map[first.min(map.len())..] {
@@ -949,8 +998,12 @@ impl Ctx<'_> {
 
     fn inlines(&mut self, spans: &[Span]) {
         let t = self.theme;
-        let keep = shallow_spans(spans);
-        for sp in keep.iter().map(|&i| &spans[i]) {
+        // A span containing one in this chunk overlaps the chunk too, so nesting depths are the
+        // same among just these. Spans elsewhere in the block would paint nothing here.
+        let hi = self.base + self.body.len();
+        let spans: Vec<&Span> = spans.iter().filter(|s| s.range.start < hi && s.range.end > self.base).collect();
+        let keep = shallow_spans(&spans);
+        for sp in keep.iter().map(|&i| spans[i]) {
             match &sp.kind {
                 SpanKind::Strong => {
                     self.apply(&sp.content, |s| s.bold = true);
@@ -1161,6 +1214,7 @@ pub fn style_chunk(input: &StyleInput<'_>) -> StyledChunk {
         show: input.focused || !live,
         paint: Paint::new(body.len(), base_st),
         decos: Vec::new(),
+        hl_volatile: false,
     };
 
     // Top-level blocks overlapping the chunk (blocks are sorted and disjoint).
@@ -1206,7 +1260,7 @@ pub fn style_chunk(input: &StyleInput<'_>) -> StyledChunk {
     }
     let (space_before, space_after) =
         if live { space_for(primary, theme.body_size) } else { (0.0, 0.0) };
-    StyledChunk { job, decorations: ctx.decos, space_before, space_after, indent: 0.0 }
+    StyledChunk { job, decorations: ctx.decos, space_before, space_after, indent: 0.0, hl_volatile: ctx.hl_volatile }
 }
 
 #[cfg(test)]

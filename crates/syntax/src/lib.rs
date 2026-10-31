@@ -30,7 +30,7 @@ use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, LinkType, Options, Pars
 
 pub mod commands;
 mod incremental;
-pub use incremental::{reparse, reparse_in_place, shift};
+pub use incremental::{Reparsed, TextChange, may_have_definition, reparse, reparse_change, reparse_in_place, shift, touches_definition};
 
 /// STABLE.
 #[derive(Clone, Debug, PartialEq)]

@@ -163,6 +163,10 @@ struct Laid {
     indent: f32,
     /// Height of the code card's header row (language + copy), reserved above the code.
     header_h: f32,
+    /// Lay out again once the highlighter's generation differs from `hl_gen`: the key only
+    /// covers the chunk's text, and these colours can still change without it.
+    hl_volatile: bool,
+    hl_gen: u64,
     /// Left offset of a code card nested in a list item or quote (from the text column).
     card_x: f32,
     /// Left offset of the outermost quote bar (a quote nested in a list item).
@@ -331,6 +335,10 @@ impl EditorState {
 
         self.sync(doc);
         doc.buffer.selection = doc.buffer.clamp_selection(doc.buffer.selection);
+        if !highlighter.has_waker() {
+            let ctx = ui.ctx().clone();
+            highlighter.set_waker(move || ctx.request_repaint());
+        }
 
         let env = Env { ctx: ui.ctx().clone(), theme, hl: highlighter, base_dir };
         let id = ui.scope_id().with("mdedit_editor");
@@ -378,6 +386,7 @@ impl EditorState {
         if self.counts_dirty {
             let idle = ui.input(|i| i.time) - self.last_activity;
             if idle >= 0.7 {
+                self.model.all_blocks();
                 self.model.counts = mdedit_syntax::word_count(&self.model.text, &self.model.blocks);
                 self.counts_dirty = false;
             } else {
@@ -400,6 +409,7 @@ impl EditorState {
     pub fn run_command(&mut self, doc: &mut Document, cmd: &Command) -> bool {
         self.sync(doc);
         let sel = doc.buffer.clamp_selection(doc.buffer.selection);
+        self.model.all_blocks();
         match commands::run(&self.model.text, &self.model.blocks, to_sel(sel), cmd) {
             Some(r) => {
                 self.apply_result(doc, r, EditKind::Other);
@@ -443,31 +453,86 @@ impl EditorState {
             return;
         }
         let t0 = std::time::Instant::now();
-        let text = doc.buffer.text();
-        let blocks = if self.model.version.is_some() {
-            let mut blocks = std::mem::take(&mut self.model.blocks);
-            mdedit_syntax::reparse_in_place(&self.model.text, &mut blocks, &text);
-            blocks
-        } else {
-            mdedit_syntax::parse(&text)
-        };
-        let t1 = t0.elapsed();
-        let style_chunks = mdedit_style::chunks(&text, &blocks);
-        let t2 = t0.elapsed();
-        let chunks = model::split_nested_code(&text, &blocks, model::display_chunks(&text, &style_chunks));
-        // Word count is deferred for big documents (see `update_counts`).
-        let counts = if text.len() <= BIG_DOC { mdedit_syntax::word_count(&text, &blocks) } else { self.model.counts };
-        self.counts_dirty = text.len() > BIG_DOC;
-
-        let t3 = t0.elapsed();
         let had = self.model.version.is_some();
-        let old = std::mem::take(&mut self.model);
-        let (p, s) = if had { model::common_affixes(&old.text, &text) } else { (0, 0) };
-        let (old_len, new_len) = (old.text.len(), text.len());
-        let mut vals = Vec::with_capacity(chunks.len());
-        for c in &chunks {
+        let rope = doc.buffer.rope();
+        let new_len = rope.len_bytes();
+        let old_len = self.model.text.len();
+        // The changed byte range. The text is then patched in place instead of copied.
+        let (p, s) = if had {
+            let chunks_from = |at: usize| {
+                let (chunks, start, _, _) = rope.chunks_at_byte(at);
+                (chunks, start)
+            };
+            model::chunk_affixes(&self.model.text, new_len, chunks_from, |i| rope.byte(i))
+        } else {
+            (0, 0)
+        };
+        let (old_end, new_end) = (old_len - s, new_len - s);
+        let mut outcome = mdedit_syntax::Reparsed::Full;
+        if had {
+            self.model.prepare_edit(old_end);
+            let removed_definition = mdedit_syntax::touches_definition(&self.model.text, p, old_end);
+            let inserted = rope.byte_slice(p..new_end).to_string();
+            self.model.text.replace_range(p..old_end, &inserted);
+            // A link elsewhere can read this definition, and its chunk's text didn't change:
+            // drop the layouts, which are keyed by text.
+            if removed_definition || mdedit_syntax::touches_definition(&self.model.text, p, new_end) {
+                self.theme_gen += 1;
+            }
+            let change = mdedit_syntax::TextChange {
+                start: p,
+                old_end,
+                new_end,
+                old_len,
+                removed_definition,
+                has_definitions: self.model.has_definitions,
+                valid_blocks: self.model.valid_blocks,
+            };
+            outcome = mdedit_syntax::reparse_change(&mut self.model.blocks, &self.model.text, &change);
+        } else {
+            self.model.text = doc.buffer.text();
+            self.model.blocks = mdedit_syntax::parse(&self.model.text);
+        }
+        match &outcome {
+            mdedit_syntax::Reparsed::Unchanged => {}
+            mdedit_syntax::Reparsed::Full => self.model.blocks_parsed(),
+            mdedit_syntax::Reparsed::Spliced { old, new_len: n } => {
+                self.model.valid_blocks = self.model.valid_blocks + n - old.len();
+                self.model.owed_shift += new_len as isize - old_len as isize;
+                if self.model.valid_blocks == self.model.blocks.len() {
+                    self.model.owed_shift = 0;
+                }
+            }
+        }
+        let t1 = t0.elapsed();
+        let delta = new_len as isize - old_len as isize;
+        let splice = match &outcome {
+            mdedit_syntax::Reparsed::Spliced { old, new_len: n } if self.model.chunks.len() == self.heights.len() => {
+                model::ChunkSplice::plan(&self.model.text, &self.model.blocks, self.model.valid_blocks, &self.model.chunks, old, *n, p, new_end, delta)
+            }
+            _ => None,
+        };
+        let new_chunks = if splice.is_none() && outcome != mdedit_syntax::Reparsed::Unchanged {
+            self.model.all_blocks();
+            Some(model::build_chunks(&self.model.text, &self.model.blocks))
+        } else {
+            None
+        };
+        let t2 = t0.elapsed();
+        // Word count is deferred for big documents (see `update_counts`).
+        if new_len <= BIG_DOC {
+            self.model.all_blocks();
+            self.model.counts = mdedit_syntax::word_count(&self.model.text, &self.model.blocks);
+        }
+        self.counts_dirty = new_len > BIG_DOC;
+
+        // Keep the heights of chunks the edit didn't touch.
+        let known = had && self.model.chunks.len() == self.heights.len();
+        let (text, old_chunks, heights) = (&self.model.text, &self.model.chunks, &self.heights);
+        let (row_h, cpr) = (self.est_row_h, self.est_cpr);
+        let height = |c: &model::DChunk| {
             let mut h = None;
-            if had && old.chunks.len() == self.heights.len() {
+            if known {
                 let old_range = if c.range.end <= p {
                     Some(c.range.clone())
                 } else if c.range.start >= new_len - s.min(new_len) && c.range.start + old_len >= new_len {
@@ -477,26 +542,31 @@ impl EditorState {
                     None
                 };
                 if let Some(r) = old_range {
-                    let k = chunk_at(&old.chunks, r.start);
-                    if old.chunks.get(k).is_some_and(|oc| oc.range == r) {
-                        h = Some(self.heights.get(k));
+                    let k = chunk_at(old_chunks, r.start);
+                    if old_chunks.get(k).is_some_and(|oc| oc.range == r) {
+                        h = Some(heights.get(k));
                     }
                 }
             }
-            let h = h.unwrap_or_else(|| {
-                let t = &text[c.range.clone()];
-                f64::from(model::estimate_height(t, self.est_row_h, self.est_cpr) + self.est_row_h * 0.4)
-            });
-            vals.push(h);
+            h.unwrap_or_else(|| f64::from(model::estimate_height(&text[c.range.clone()], row_h, cpr) + row_h * 0.4))
+        };
+        if let Some(sp) = splice {
+            let vals: Vec<f64> = sp.new.iter().map(height).collect();
+            self.heights.splice(sp.old.clone(), vals);
+            sp.apply(&mut self.model.chunks, &mut self.model.hashes);
+        } else if let Some(chunks) = new_chunks {
+            let vals: Vec<f64> = chunks.iter().map(height).collect();
+            self.heights = Heights::new(vals);
+            self.model.hashes = vec![None; chunks.len()];
+            self.model.chunks = chunks;
         }
         // Keep the scroll anchor on the same text when bytes before it changed.
         if had && self.anchor.byte >= old_len.saturating_sub(s) && self.anchor.byte >= p {
             self.anchor.byte = (self.anchor.byte + new_len).saturating_sub(old_len);
         }
-        self.anchor.byte = model::floor_boundary(&text, self.anchor.byte);
-        self.heights = Heights::new(vals);
-        self.model = Model { version: Some(key), hashes: vec![None; chunks.len()], text, blocks, chunks, counts };
-        log::debug!("model rebuilt in {:?} [text+parse {t1:?}, chunks {t2:?}, display {t3:?}] ({} bytes, {} chunks)", t0.elapsed(), self.model.text.len(), self.model.chunks.len());
+        self.anchor.byte = model::floor_boundary(&self.model.text, self.anchor.byte);
+        self.model.version = Some(key);
+        log::debug!("model updated in {:?} [text+parse {t1:?}, chunks {t2:?}] ({} bytes, {} chunks)", t0.elapsed(), self.model.text.len(), self.model.chunks.len());
     }
 
     fn chunk_y(&self, i: usize) -> f32 {
@@ -547,11 +617,16 @@ impl EditorState {
     /// Styled and laid-out chunk `i` (cached).
     fn laid(&mut self, env: &Env<'_>, i: usize, focused: bool) -> Arc<Laid> {
         let key = self.layout_key(env, i, focused);
-        if let Some(e) = self.cache.get_mut(&key) {
+        // Read before styling: a result arriving meanwhile then still triggers a new layout.
+        let hl_gen = env.hl.generation();
+        if let Some(e) = self.cache.get_mut(&key)
+            && !(e.laid.hl_volatile && e.laid.hl_gen != hl_gen)
+        {
             e.used = self.frame;
             return e.laid.clone();
         }
         let c = self.model.chunks[i].clone();
+        self.model.blocks_through(c.range.end);
         let text = &self.model.text;
         let expected = &text[c.range.start..c.text_end(text)];
         let style_chunk = mdedit_style::Chunk { range: c.range.clone(), block: c.block };
@@ -577,7 +652,7 @@ impl EditorState {
         let card_x = if nested_code { extra } else { 0.0 };
         let styled = mdedit_style::style_chunk(&mdedit_style::StyleInput {
             text,
-            blocks: &self.model.blocks,
+            blocks: self.model.valid(),
             chunk: &style_chunk,
             mode: self.mode,
             focused,
@@ -627,6 +702,8 @@ impl EditorState {
             space_after: fin(styled.space_after) + pad_v + if has_header { 8.0 } else { 0.0 },
             indent,
             header_h,
+            hl_volatile: styled.hl_volatile,
+            hl_gen,
             card_x: card_x.min(self.col_w * 0.6),
             quote_x: list_x(outer_lists),
         });
@@ -1426,7 +1503,8 @@ impl EditorState {
         let mut chars = t.chars();
         if let (Some(ch), None) = (chars.next(), chars.next()) {
             let sel = to_sel(doc.buffer.selection);
-            if let Some(r) = commands::on_char(&self.model.text, &self.model.blocks, sel, ch) {
+            self.model.blocks_through(sel.anchor.max(sel.head));
+            if let Some(r) = commands::on_char(&self.model.text, self.model.valid(), sel, ch) {
                 self.apply_result(doc, r, EditKind::Typing);
                 return;
             }
@@ -1527,7 +1605,8 @@ impl EditorState {
             }
             Key::Enter => {
                 let s = to_sel(sel);
-                let r = if shift { None } else { commands::on_enter(&self.model.text, &self.model.blocks, s) };
+                self.model.blocks_through(sel.range().end);
+                let r = if shift { None } else { commands::on_enter(&self.model.text, self.model.valid(), s) };
                 match r {
                     Some(r) => self.apply_result(doc, r, EditKind::Other),
                     None => doc.buffer.insert_at_selection("\n", EditKind::Typing),
@@ -1538,7 +1617,8 @@ impl EditorState {
                 if ctrl {
                     return false;
                 }
-                match commands::on_tab(&self.model.text, &self.model.blocks, to_sel(sel), shift) {
+                self.model.blocks_through(sel.range().end);
+                match commands::on_tab(&self.model.text, self.model.valid(), to_sel(sel), shift) {
                     Some(r) => self.apply_result(doc, r, EditKind::Other),
                     None if !shift => doc.buffer.insert_at_selection("\t", EditKind::Typing),
                     None => {}
@@ -1547,10 +1627,11 @@ impl EditorState {
             }
             Key::Backspace | Key::Delete => {
                 let back = key == Key::Backspace;
+                self.model.blocks_through(sel.range().end);
                 let text = &self.model.text;
                 if back
                     && !ctrl
-                    && let Some(r) = commands::on_backspace(text, &self.model.blocks, to_sel(sel))
+                    && let Some(r) = commands::on_backspace(text, self.model.valid(), to_sel(sel))
                 {
                     self.apply_result(doc, r, EditKind::Other);
                     self.after_change(ui);
@@ -1574,7 +1655,8 @@ impl EditorState {
             }
             Key::A if ctrl => {
                 let r = sel.range();
-                let code = commands::block_at(&self.model.blocks, sel.head).and_then(|b| match &b.kind {
+                self.model.blocks_through(sel.head);
+                let code = commands::block_at(self.model.valid(), sel.head).and_then(|b| match &b.kind {
                     mdedit_syntax::BlockKind::CodeBlock(_) => Some(b.content.clone()),
                     _ => None,
                 });

@@ -53,14 +53,7 @@ pub(crate) fn display_chunks(text: &str, style_chunks: &[mdedit_style::Chunk]) -
     let mut out = Vec::with_capacity(style_chunks.len() + 1);
     if valid {
         for c in style_chunks {
-            if c.range.is_empty() && !text.is_empty() {
-                continue;
-            }
-            if c.range.len() > MAX_CHUNK_BYTES {
-                split_into(text, c.range.clone(), None, &mut out);
-            } else {
-                out.push(DChunk { range: c.range.clone(), block: c.block });
-            }
+            push_display_chunk(text, c, &mut out);
         }
     } else if !text.is_empty() {
         split_into(text, 0..text.len(), None, &mut out);
@@ -72,6 +65,109 @@ pub(crate) fn display_chunks(text: &str, style_chunks: &[mdedit_style::Chunk]) -
         out.push(DChunk { range: text.len()..text.len(), block: None });
     }
     out
+}
+
+fn push_display_chunk(text: &str, c: &mdedit_style::Chunk, out: &mut Vec<DChunk>) {
+    if c.range.is_empty() && !text.is_empty() {
+        return;
+    }
+    if c.range.len() > MAX_CHUNK_BYTES {
+        split_into(text, c.range.clone(), None, out);
+    } else {
+        out.push(DChunk { range: c.range.clone(), block: c.block });
+    }
+}
+
+/// All display chunks of a document, from scratch.
+pub(crate) fn build_chunks(text: &str, blocks: &[Block]) -> Vec<DChunk> {
+    split_nested_code(text, blocks, display_chunks(text, &mdedit_style::chunks(text, blocks)))
+}
+
+/// How the display chunks change for one edit: `old` is replaced by `new`, and the chunks after
+/// it keep their text and only move.
+#[derive(Debug)]
+pub(crate) struct ChunkSplice {
+    pub old: Range<usize>,
+    pub new: Vec<DChunk>,
+    delta: isize,
+    block_delta: isize,
+}
+
+impl ChunkSplice {
+    /// Work out the change after the blocks `old_blocks` became `blocks[old_blocks.start..][..new_len]`,
+    /// in `text` with bytes `start..new_end` new (`delta` = its change in length). `None` if the
+    /// chunk boundaries around them can't be matched up: the caller rebuilds everything.
+    #[allow(clippy::too_many_arguments)]
+    pub fn plan(text: &str, blocks: &[Block], valid: usize, chunks: &[DChunk], old_blocks: &Range<usize>, new_len: usize, start: usize, new_end: usize, delta: isize) -> Option<Self> {
+        if blocks.is_empty() || chunks.is_empty() {
+            return None;
+        }
+        let ls = |i: usize| line_start(text, blocks[i].range.start);
+        // From the block before (its chunk ends where the replaced ones start) ...
+        let mut a = old_blocks.start.saturating_sub(1).min(blocks.len() - 1);
+        while a > 0 && ls(a) <= ls(a - 1) {
+            a -= 1;
+        }
+        // ... to the next block that starts its own chunk (blocks on one line share a chunk).
+        let mut b = old_blocks.start + new_len;
+        while b < valid && b > 0 && ls(b) <= ls(b - 1) {
+            b += 1;
+        }
+        // Only blocks before `valid` have correct ranges.
+        if b >= valid && valid < blocks.len() {
+            return None;
+        }
+        let begin = if a == 0 { 0 } else { ls(a) };
+        let end = if b < blocks.len() { ls(b) } else { text.len() };
+        if begin > start || end < new_end || b <= a {
+            return None;
+        }
+        let k0 = chunks.partition_point(|c| c.range.start < begin);
+        if chunks.get(k0)?.range.start != begin {
+            return None;
+        }
+        let k1 = if b < blocks.len() {
+            let old_end = end as isize - delta;
+            let k1 = chunks.partition_point(|c| (c.range.start as isize) < old_end);
+            if chunks.get(k1)?.range.start as isize != old_end {
+                return None;
+            }
+            k1
+        } else {
+            chunks.len()
+        };
+        let mut pieces = Vec::new();
+        if a == 0 && ls(0) > 0 {
+            pieces.push(mdedit_style::Chunk { range: 0..ls(0), block: None });
+        }
+        pieces.extend(mdedit_style::chunks_of_blocks(text, blocks, a..b, end));
+        let mut display = Vec::with_capacity(pieces.len() + 1);
+        for c in &pieces {
+            push_display_chunk(text, c, &mut display);
+        }
+        let mut new = split_nested_code(text, blocks, display);
+        if b == blocks.len() && text.ends_with('\n') {
+            new.push(DChunk { range: text.len()..text.len(), block: None });
+        }
+        let block_delta = new_len as isize - old_blocks.len() as isize;
+        Some(Self { old: k0..k1, new, delta, block_delta })
+    }
+
+    /// Apply to the chunks and their cached text hashes (those after the change stay valid).
+    pub fn apply(self, chunks: &mut Vec<DChunk>, hashes: &mut Vec<Option<u64>>) {
+        let tail_from = self.old.start + self.new.len();
+        hashes.splice(self.old.clone(), std::iter::repeat_n(None, self.new.len()));
+        chunks.splice(self.old, self.new);
+        if self.delta != 0 || self.block_delta != 0 {
+            for c in &mut chunks[tail_from..] {
+                c.range.start = (c.range.start as isize + self.delta) as usize;
+                c.range.end = (c.range.end as isize + self.delta) as usize;
+                if let Some(b) = &mut c.block {
+                    *b = (*b as isize + self.block_delta) as usize;
+                }
+            }
+        }
+    }
 }
 
 /// Split list and quote chunks for display: each list item starts a chunk (the editor indents
@@ -306,6 +402,18 @@ impl Heights {
     pub fn len(&self) -> usize {
         self.vals.len()
     }
+    /// Replace heights `range` with `new`.
+    pub fn splice(&mut self, range: Range<usize>, new: Vec<f64>) {
+        if range.len() == new.len() {
+            for (i, v) in range.zip(new) {
+                self.set(i, v);
+            }
+        } else {
+            let mut vals = std::mem::take(&mut self.vals);
+            vals.splice(range, new);
+            *self = Self::new(vals);
+        }
+    }
     pub fn get(&self, i: usize) -> f64 {
         self.vals.get(i).copied().unwrap_or(0.0)
     }
@@ -366,13 +474,71 @@ impl Heights {
 pub(crate) struct Model {
     pub version: Option<(u64, usize)>,
     pub text: String,
+    /// Only `blocks[..valid_blocks]` have correct ranges; the rest are owed `owed_shift`. Moving
+    /// every block after the caret on each keystroke is what made typing cost the document's
+    /// size, and only the blocks being drawn or edited are read. See [`Self::blocks_through`].
     pub blocks: Vec<Block>,
+    pub valid_blocks: usize,
+    pub owed_shift: isize,
+    /// `mdedit_syntax::may_have_definition` of the text.
+    pub has_definitions: bool,
     pub chunks: Vec<DChunk>,
     pub hashes: Vec<Option<u64>>,
     pub counts: (usize, usize),
 }
 
+/// Blocks past the position asked for that are made valid too: enough for the parser's context.
+const VALID_MARGIN: usize = 3;
+
 impl Model {
+    /// Blocks with correct ranges, at least up to byte `at` and a few more.
+    pub fn blocks_through(&mut self, at: usize) -> &[Block] {
+        let owed = self.owed_shift;
+        let n = self.blocks.len();
+        let mut margin = VALID_MARGIN;
+        while self.valid_blocks < n && margin > 0 {
+            let b = &mut self.blocks[self.valid_blocks];
+            if (b.range.start as isize + owed) as usize > at {
+                margin -= 1;
+            }
+            mdedit_syntax::shift(b, owed);
+            self.valid_blocks += 1;
+        }
+        if self.valid_blocks == n {
+            self.owed_shift = 0;
+        }
+        &self.blocks[..self.valid_blocks]
+    }
+
+    /// Make the blocks valid just past byte `at` and no further, ready for an edit ending there:
+    /// everything after it then only needs its owed shift to grow.
+    pub fn prepare_edit(&mut self, at: usize) {
+        self.blocks_through(at);
+        let past = self.valid().partition_point(|b| b.range.start <= at);
+        let keep = (past + VALID_MARGIN).min(self.valid_blocks);
+        for b in &mut self.blocks[keep..self.valid_blocks] {
+            mdedit_syntax::shift(b, -self.owed_shift);
+        }
+        self.valid_blocks = keep;
+    }
+
+    /// The blocks known to have correct ranges.
+    pub fn valid(&self) -> &[Block] {
+        &self.blocks[..self.valid_blocks]
+    }
+
+    /// All blocks, with correct ranges.
+    pub fn all_blocks(&mut self) -> &[Block] {
+        self.blocks_through(usize::MAX)
+    }
+
+    /// `blocks` just came from a full parse of `text`.
+    pub fn blocks_parsed(&mut self) {
+        self.valid_blocks = self.blocks.len();
+        self.owed_shift = 0;
+        self.has_definitions = mdedit_syntax::may_have_definition(&self.text);
+    }
+
     pub fn chunk_hash(&mut self, i: usize) -> u64 {
         if let Some(Some(h)) = self.hashes.get(i) {
             return *h;
@@ -387,17 +553,56 @@ impl Model {
     }
 }
 
-/// Length of the common prefix and suffix (non-overlapping) of two strings, in bytes.
-pub(crate) fn common_affixes(a: &str, b: &str) -> (usize, usize) {
-    let (ab, bb) = (a.as_bytes(), b.as_bytes());
-    let max = ab.len().min(bb.len());
-    let mut p = ab.iter().zip(bb).take_while(|(x, y)| x == y).count().min(max);
-    while p > 0 && !(a.is_char_boundary(p) && b.is_char_boundary(p)) {
+/// Length of the common prefix and suffix (non-overlapping, on char boundaries) of `old` and a
+/// new text of `new_len` bytes. The new text is read through `chunks_from(at)`: its chunks from
+/// the one holding byte `at`, with that chunk's start. Compares whole chunks with memcmp, so
+/// megabytes per keystroke stay cheap, without copying the new text. Both ends are found walking
+/// forward: a rope's reverse iterator is far slower.
+pub(crate) fn chunk_affixes<'a, I: Iterator<Item = &'a str>>(
+    old: &str,
+    new_len: usize,
+    chunks_from: impl Fn(usize) -> (I, usize),
+    new_byte: impl Fn(usize) -> u8,
+) -> (usize, usize) {
+    let o = old.as_bytes();
+    let new_boundary = |i: usize| i >= new_len || (new_byte(i) & 0xC0) != 0x80;
+    let max = o.len().min(new_len);
+    let mut p = 0;
+    for c in chunks_from(0).0 {
+        let c = c.as_bytes();
+        let n = c.len().min(max - p);
+        if o[p..p + n] != c[..n] {
+            p += o[p..p + n].iter().zip(c).take_while(|(x, y)| x == y).count();
+            break;
+        }
+        p += n;
+        if p == max {
+            break;
+        }
+    }
+    while p > 0 && !(old.is_char_boundary(p) && new_boundary(p)) {
         p -= 1;
     }
-    let max_s = max - p;
-    let mut s = ab.iter().rev().zip(bb.iter().rev()).take(max_s).take_while(|(x, y)| x == y).count();
-    while s > 0 && !(a.is_char_boundary(ab.len() - s) && b.is_char_boundary(bb.len() - s)) {
+    // Walk the part of the new text that can be in the suffix, comparing each byte with the one
+    // the same distance from the end of `old`. The suffix starts after the last difference.
+    let from = new_len - (max - p);
+    let mut suffix_start = from;
+    let (chunks, mut at) = chunks_from(from);
+    for c in chunks {
+        let c = c.as_bytes();
+        let skip = from.saturating_sub(at);
+        let new_part = &c[skip.min(c.len())..];
+        let start = at + skip.min(c.len());
+        let old_start = start + o.len() - new_len;
+        if *new_part != o[old_start..old_start + new_part.len()]
+            && let Some(i) = new_part.iter().zip(&o[old_start..]).rposition(|(x, y)| x != y)
+        {
+            suffix_start = start + i + 1;
+        }
+        at += c.len();
+    }
+    let mut s = new_len - suffix_start;
+    while s > 0 && !(old.is_char_boundary(o.len() - s) && new_boundary(new_len - s)) {
         s -= 1;
     }
     (p, s)
@@ -407,6 +612,46 @@ pub(crate) fn common_affixes(a: &str, b: &str) -> (usize, usize) {
 mod tests {
     use super::*;
     use mdedit_style::Chunk;
+
+    /// [`chunk_affixes`] over `b` cut into chunks of `size` bytes (on char boundaries).
+    fn affixes_in_chunks(a: &str, b: &str, size: usize) -> (usize, usize) {
+        let mut parts = Vec::new();
+        let mut rest = b;
+        while !rest.is_empty() {
+            let mut n = size.min(rest.len());
+            while !rest.is_char_boundary(n) {
+                n += 1;
+            }
+            parts.push(&rest[..n]);
+            rest = &rest[n..];
+        }
+        let chunks_from = |at: usize| {
+            let mut start = 0;
+            let mut k = 0;
+            while k + 1 < parts.len() && start + parts[k].len() <= at {
+                start += parts[k].len();
+                k += 1;
+            }
+            (parts[k.min(parts.len())..].iter().copied(), start)
+        };
+        chunk_affixes(a, b.len(), chunks_from, |i| b.as_bytes()[i])
+    }
+
+    /// The obvious byte loop, as the reference.
+    fn common_affixes(a: &str, b: &str) -> (usize, usize) {
+        let (ab, bb) = (a.as_bytes(), b.as_bytes());
+        let max = ab.len().min(bb.len());
+        let mut p = ab.iter().zip(bb).take_while(|(x, y)| x == y).count().min(max);
+        while p > 0 && !(a.is_char_boundary(p) && b.is_char_boundary(p)) {
+            p -= 1;
+        }
+        let max_s = max - p;
+        let mut s = ab.iter().rev().zip(bb.iter().rev()).take(max_s).take_while(|(x, y)| x == y).count();
+        while s > 0 && !(a.is_char_boundary(ab.len() - s) && b.is_char_boundary(bb.len() - s)) {
+            s -= 1;
+        }
+        (p, s)
+    }
 
     #[test]
     fn nested_code_gets_its_own_chunk() {
@@ -538,9 +783,24 @@ mod tests {
         assert_eq!(common_affixes("aaa", "aaaa"), (3, 0));
         assert_eq!(common_affixes("é", "è"), (0, 0));
         assert_eq!(common_affixes("", "x"), (0, 0));
+        for size in [1, 2, 3, 5, 100] {
+            assert_eq!(affixes_in_chunks("hello world", "hello brave world", size), (6, 5));
+            assert_eq!(affixes_in_chunks("aaa", "aaaa", size), (3, 0));
+            assert_eq!(affixes_in_chunks("é", "è", size), (0, 0));
+            assert_eq!(affixes_in_chunks("", "x", size), (0, 0));
+            assert_eq!(affixes_in_chunks("x", "", size), (0, 0));
+        }
     }
 
     proptest::proptest! {
+        #[test]
+        fn chunk_affixes_match_byte_loop(a in "[aéb\n]{0,40}", b in "[aéb\n]{0,40}", size in 1usize..12) {
+            let joined = format!("{a}{b}");
+            proptest::prop_assert_eq!(affixes_in_chunks(&a, &b, size), common_affixes(&a, &b));
+            proptest::prop_assert_eq!(affixes_in_chunks(&joined, &b, size), common_affixes(&joined, &b));
+            proptest::prop_assert_eq!(affixes_in_chunks(&a, &joined, size), common_affixes(&a, &joined));
+        }
+
         #[test]
         fn mapping_roundtrip(s in "[a-zé\n]{0,60}", at in 0usize..80) {
             let chunks = display_chunks(&s, &[]);

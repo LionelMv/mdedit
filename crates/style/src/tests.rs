@@ -16,7 +16,7 @@ fn span(kind: SpanKind, range: Range<usize>, content: Range<usize>) -> Span {
 
 fn hl() -> &'static Highlighter {
     static H: std::sync::OnceLock<Highlighter> = std::sync::OnceLock::new();
-    H.get_or_init(Highlighter::new)
+    H.get_or_init(Highlighter::synchronous)
 }
 
 fn style(text: &str, blocks: &[Block], chunk: &Chunk, mode: Mode, focused: bool, theme: &Theme) -> StyledChunk {
