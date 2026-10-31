@@ -262,6 +262,11 @@ fn to_sel(s: Selection) -> Sel {
 }
 
 impl EditorState {
+    /// An input method composition is in progress.
+    pub fn composing(&self) -> bool {
+        self.preedit.is_some()
+    }
+
     pub fn new() -> Self {
         Self {
             mode: Mode::LivePreview,

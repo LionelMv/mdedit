@@ -311,6 +311,17 @@ fn clicking_empty_sidebar_space_keeps_editor_focus() {
     h.get_by_label("x.md •");
 }
 
+#[test]
+fn idle_preedits_are_dropped_unless_composing() {
+    let preedit = |text: &str| egui::Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: None });
+    let events = || vec![preedit(""), preedit("x"), egui::Event::Text("a".into())];
+    let mut raw = egui::RawInput { events: events(), ..Default::default() };
+    crate::app::drop_idle_preedits(&mut raw, true);
+    assert_eq!(raw.events.len(), 3);
+    crate::app::drop_idle_preedits(&mut raw, false);
+    assert_eq!(raw.events, events()[1..]);
+}
+
 /// Enter with Cancel focused cancels: no table.
 #[test]
 fn enter_on_table_dialog_cancel_inserts_nothing() {

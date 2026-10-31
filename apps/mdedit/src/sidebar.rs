@@ -93,9 +93,13 @@ impl Sidebar {
             }
             let caret = tab.doc.buffer.selection.head;
             let current = self.outline.iter().rposition(|h| h.at <= caret);
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                for (i, h) in self.outline.iter().enumerate() {
+            let row_h = ui.spacing().interact_size.y;
+            // Only the visible rows: an outline can have thousands, and this runs every frame.
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, self.outline.len(), |ui, rows| {
+                for i in rows {
+                    let h = &self.outline[i];
                     ui.horizontal(|ui| {
+                        ui.set_min_height(row_h);
                         ui.add_space(f32::from(h.level.saturating_sub(1)) * 12.0);
                         let text = if h.text.trim().is_empty() { "(empty heading)" } else { h.text.as_str() };
                         let rich = if h.level <= 1 { egui::RichText::new(text).strong() } else { egui::RichText::new(text) };

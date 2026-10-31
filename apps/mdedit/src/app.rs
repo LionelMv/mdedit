@@ -1000,7 +1000,20 @@ impl MdApp {
     }
 }
 
+/// Drop the empty preedits an idle input method answers with. egui-winit sends the caret area on
+/// every frame with input events, and IBus on Wayland replies with an empty preedit, which is an
+/// event: without this the window redraws nonstop while focused. Composing, one ends the text.
+pub(crate) fn drop_idle_preedits(raw: &mut egui::RawInput, composing: bool) {
+    if !composing {
+        raw.events.retain(|e| !matches!(e, egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) if text.is_empty()));
+    }
+}
+
 impl eframe::App for MdApp {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        drop_idle_preedits(raw_input, self.tabs.get(self.active).is_some_and(|t| t.editor.composing()));
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_background(&ctx);
