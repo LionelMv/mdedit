@@ -44,6 +44,11 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.0" date="2026-10-31">
+      <description>
+        <p>Reopens your last files, opens files as tabs in the running window, and fixes data loss, text damage and idle CPU use.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-10-28">
       <description>
         <p>First release.</p>

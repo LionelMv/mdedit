@@ -2358,7 +2358,7 @@ dependencies = [
 
 [[package]]
 name = "mdedit"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "eframe",
  "egui",
@@ -2386,7 +2386,7 @@ dependencies = [
 
 [[package]]
 name = "mdedit-buffer"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proptest",
  "regex",
@@ -2397,7 +2397,7 @@ dependencies = [
 
 [[package]]
 name = "mdedit-editor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "egui",
  "egui_kittest",
@@ -2413,7 +2413,7 @@ dependencies = [
 
 [[package]]
 name = "mdedit-export"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ammonia",
  "mdedit-highlight",
@@ -2425,7 +2425,7 @@ dependencies = [
 
 [[package]]
 name = "mdedit-highlight"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proptest",
  "syntect",
@@ -2435,7 +2435,7 @@ dependencies = [
 
 [[package]]
 name = "mdedit-style"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "egui",
  "mdedit-highlight",
@@ -2446,7 +2446,7 @@ dependencies = [
 
 [[package]]
 name = "mdedit-syntax"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proptest",
  "pulldown-cmark",
@@ -2455,7 +2455,7 @@ dependencies = [
 
 [[package]]
 name = "mdedit-workspace"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "directories",
  "log",
