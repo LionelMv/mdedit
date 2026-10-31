@@ -510,6 +510,31 @@ fn ctrl_click_link_reports_url() {
     assert!(h.sel().head > 4 && h.sel().head < 35);
 }
 
+/// A block bigger than a chunk has one header, and its Copy takes the whole block.
+#[test]
+fn code_header_copy_button_on_split_block() {
+    let body: String = (0..4000).map(|i| format!("let line_{i} = {i};\n")).collect();
+    let text = format!("para\n\n```rust\n{body}```\n");
+    let mut h = H::new(&text);
+    h.set_caret(0);
+    h.frame(vec![]);
+    let headers: Vec<Rect> = h.decos().into_iter().filter_map(|d| match d {
+        DecoGeom::Header { button, .. } => Some(button),
+        _ => None,
+    }).collect();
+    assert_eq!(headers.len(), 1);
+    let off = h.ed.anchor_offset();
+    let pos = headers[0].center() - vec2(0.0, off);
+    h.frame_at(vec![Event::PointerMoved(pos)], Modifiers::NONE);
+    h.frame_at(vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }], Modifiers::NONE);
+    let copied = h.platform.commands.iter().find_map(|c| match c {
+        egui::OutputCommand::CopyText(t) => Some(t.as_str()),
+        _ => None,
+    });
+    assert!(copied == Some(body.trim_end()), "copied {:?} bytes of {}", copied.map(str::len), body.len());
+    assert_eq!(h.text(), text);
+}
+
 #[test]
 fn code_header_copy_button() {
     let text = "para\n\n```rust\nfn x() {}\n```\n";
