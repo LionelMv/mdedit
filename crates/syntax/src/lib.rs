@@ -138,6 +138,19 @@ pub enum SpanKind {
     Html,
 }
 
+/// GitHub-style heading slug: lowercase, keep alphanumerics, `-` and `_`, spaces → `-`.
+pub fn slugify(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.trim().chars() {
+        if c.is_alphanumeric() || c == '_' || c == '-' {
+            out.extend(c.to_lowercase());
+        } else if c.is_whitespace() {
+            out.push('-');
+        }
+    }
+    out
+}
+
 /// The pulldown-cmark options used by [`parse`] (and by the HTML export, so both agree).
 pub fn parser_options() -> Options {
     Options::ENABLE_TABLES
@@ -155,7 +168,7 @@ pub fn parser_options() -> Options {
 // ---------------------------------------------------------------------------------------
 
 /// Largest char boundary `<= i` (and `<= text.len()`).
-pub(crate) fn floor_boundary(text: &str, i: usize) -> usize {
+pub fn floor_boundary(text: &str, i: usize) -> usize {
     let mut i = i.min(text.len());
     while i > 0 && !text.is_char_boundary(i) {
         i -= 1;
@@ -164,7 +177,7 @@ pub(crate) fn floor_boundary(text: &str, i: usize) -> usize {
 }
 
 /// Start of the line containing byte `i`.
-pub(crate) fn line_start(text: &str, i: usize) -> usize {
+pub fn line_start(text: &str, i: usize) -> usize {
     let i = floor_boundary(text, i);
     text.as_bytes()[..i].iter().rposition(|&b| b == b'\n').map_or(0, |p| p + 1)
 }

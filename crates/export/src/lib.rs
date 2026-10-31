@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use mdedit_highlight::{HlTheme, Highlighter, html_escape};
+use mdedit_syntax::slugify;
 use pulldown_cmark::{
     Alignment, BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, LinkType, Options, Parser, Tag, TagEnd,
 };
@@ -470,18 +471,6 @@ fn level_num(l: HeadingLevel) -> u8 {
         HeadingLevel::H5 => 5,
         HeadingLevel::H6 => 6,
     }
-}
-
-fn slugify(s: &str) -> String {
-    let mut out = String::new();
-    for c in s.trim().chars().flat_map(char::to_lowercase) {
-        if c.is_alphanumeric() || c == '_' || c == '-' {
-            out.push(c);
-        } else if c.is_whitespace() && !out.ends_with('-') {
-            out.push('-');
-        }
-    }
-    out.trim_matches('-').to_string()
 }
 
 fn class_safe(s: &str) -> String {

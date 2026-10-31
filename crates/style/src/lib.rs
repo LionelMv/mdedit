@@ -805,10 +805,7 @@ impl Ctx<'_> {
         for f in open.iter().chain(close.iter()) {
             // Include the container prefix (list indent, `> `) so the hidden fence line of a
             // nested block takes no room.
-            let ls = line_start(self.text, f.start);
-            let prefix = self.text.get(ls..f.start.max(ls)).unwrap_or("x");
-            let ls = if prefix.chars().all(|c| matches!(c, ' ' | '\t' | '>')) { ls } else { f.start };
-            let r = self.with_newline(&(ls..f.end));
+            let r = self.with_newline(&(self.indent_start(f.start)..f.end));
             self.vis(&r, Vis::Marker);
             if self.show {
                 self.apply(f, |s| s.color = marker_col);
@@ -917,8 +914,12 @@ impl Ctx<'_> {
                 self.rel(&(ls..le))
             }
         };
-        let code = self.rel(&content);
-        self.deco(Decoration::CodeHeader { range: header, lang, code });
+        // One header per block: a big block is split over several chunks.
+        let top = open.as_ref().map_or(content.start, |f| f.start);
+        if top >= self.base && top <= self.base + self.body.len() {
+            let code = self.rel(&content);
+            self.deco(Decoration::CodeHeader { range: header, lang, code });
+        }
     }
 
     fn table(&mut self, b: &Block, aligns: &[mdedit_syntax::Align], rows: &[mdedit_syntax::TableRow]) {
@@ -936,15 +937,16 @@ impl Ctx<'_> {
         let mut dims: Vec<(Range<usize>, Vis)> = Vec::new();
         let body = self.body;
         let mut pos = r.start;
+        // Only the line below the header is the delimiter row: a body row can look like one.
+        let delimiter = self.text[b.range.start..].find('\n').map(|p| b.range.start + p + 1);
         for line in body[r.clone()].split_inclusive('\n') {
             let l_end = pos + line.len();
-            if line.trim().chars().all(|c| matches!(c, '|' | ':' | '-' | ' ' | '\t'))
-                && line.contains('-')
-            {
+            if Some(self.base + pos) == delimiter {
                 dims.push((pos..l_end, Vis::Marker));
             } else {
                 for (i, c) in line.char_indices() {
-                    if c == '|' {
+                    // `\\|` is a pipe in the cell's text.
+                    if c == '|' && (i == 0 || line.as_bytes()[i - 1] != b'\\') {
                         dims.push((pos + i..pos + i + 1, Vis::Ghost));
                     }
                 }
@@ -1028,18 +1030,7 @@ impl Ctx<'_> {
                     let r = self.rel(c);
                     self.deco(Decoration::InlineBg { range: r, fill: t.inline_code_bg });
                 }
-                SpanKind::Link { url } => {
-                    let col = t.link;
-                    self.apply(&sp.range, |s| {
-                        s.color = col;
-                        s.underline = true;
-                    });
-                    self.outer_markers(&sp.range, &sp.content, Vis::Marker);
-                    let c = if sp.content.start < sp.content.end { &sp.content } else { &sp.range };
-                    let r = self.rel(c);
-                    self.deco(Decoration::Link { range: r, url: url.clone() });
-                }
-                SpanKind::Autolink { url } => {
+                SpanKind::Link { url } | SpanKind::Autolink { url } => {
                     let col = t.link;
                     self.apply(&sp.range, |s| {
                         s.color = col;

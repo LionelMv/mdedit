@@ -967,7 +967,9 @@ impl EditorState {
                             // Copy button: a square at the right end of the header row.
                             let side = (hh - 8.0).max(16.0);
                             let button = Rect::from_center_size(pos2(col_r - CARD_PAD_H + 4.0 - side / 2.0, card.min.y + hh / 2.0 + 2.0), vec2(side, side));
-                            let code_abs = (c.range.start + code.start).min(c.range.end)..(c.range.start + code.end).min(c.range.end);
+                            // A big block is split over several chunks: Copy takes all of it.
+                            let whole = commands::block_at(&self.model.blocks, c.range.start).filter(|b| matches!(b.kind, mdedit_syntax::BlockKind::CodeBlock(_)));
+                            let code_abs = whole.map_or_else(|| (c.range.start + code.start).min(c.range.end)..(c.range.start + code.end).min(c.range.end), |b| b.content.clone());
                             ds.push(DecoGeom::Header { card, lang: lang.clone(), code: code_abs, button });
                         }
                     }

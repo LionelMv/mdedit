@@ -98,9 +98,9 @@ pub fn shortcuts() -> Vec<(KeyboardShortcut, Action)> {
     ]
 }
 
-/// Shortcut text for a menu item, if it has one.
-pub fn shortcut_text(ctx: &egui::Context, action: &Action) -> Option<String> {
-    let fixed = match action {
+/// Shortcuts the text editor handles itself, or that aren't in [`shortcuts`].
+fn fixed_shortcut(action: &Action) -> Option<&'static str> {
+    match action {
         Action::ZoomIn => Some("Ctrl++"),
         Action::ZoomOut => Some("Ctrl+-"),
         Action::ZoomReset => Some("Ctrl+0"),
@@ -111,11 +111,20 @@ pub fn shortcut_text(ctx: &egui::Context, action: &Action) -> Option<String> {
         Action::Paste => Some("Ctrl+V"),
         Action::SelectAll => Some("Ctrl+A"),
         _ => None,
-    };
-    if let Some(f) = fixed {
+    }
+}
+
+/// egui's text for a shortcut, with the symbols the user guide uses.
+fn format(ctx: &egui::Context, s: &KeyboardShortcut) -> String {
+    ctx.format_shortcut(s).replace("Comma", ",").replace("Minus", "-").replace("Backtick", "`")
+}
+
+/// Shortcut text for a menu item, if it has one.
+pub fn shortcut_text(ctx: &egui::Context, action: &Action) -> Option<String> {
+    if let Some(f) = fixed_shortcut(action) {
         return Some(f.to_string());
     }
-    shortcuts().into_iter().find(|(_, a)| a == action).map(|(s, _)| ctx.format_shortcut(&s))
+    shortcuts().into_iter().find(|(_, a)| a == action).map(|(s, _)| format(ctx, &s))
 }
 
 /// Consume pressed app shortcuts (before the editor sees them).
@@ -144,7 +153,10 @@ pub struct MenuState<'a> {
 }
 
 fn item(ui: &mut egui::Ui, label: &str, action: Action, out: &mut Vec<Action>) {
-    let mut b = egui::Button::new(label);
+    entry(ui, egui::Button::new(label), action, out);
+}
+
+fn entry(ui: &mut egui::Ui, mut b: egui::Button<'_>, action: Action, out: &mut Vec<Action>) {
     if let Some(sc) = shortcut_text(ui.ctx(), &action) {
         b = b.shortcut_text(sc);
     }
@@ -159,14 +171,7 @@ fn item_enabled(ui: &mut egui::Ui, enabled: bool, label: &str, action: Action, o
 }
 
 fn check(ui: &mut egui::Ui, on: bool, label: &str, action: Action, out: &mut Vec<Action>) {
-    let mut b = egui::Button::selectable(on, label);
-    if let Some(sc) = shortcut_text(ui.ctx(), &action) {
-        b = b.shortcut_text(sc);
-    }
-    if ui.add(b).clicked() {
-        out.push(action);
-        ui.close();
-    }
+    entry(ui, egui::Button::selectable(on, label), action, out);
 }
 
 pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>, out: &mut Vec<Action>) {
@@ -275,11 +280,12 @@ pub fn menu_bar(ui: &mut egui::Ui, st: &MenuState<'_>, out: &mut Vec<Action>) {
 
 /// Human-readable list for the shortcuts window.
 pub fn shortcut_help_rows(ctx: &egui::Context) -> Vec<(String, String)> {
-    let mut rows: Vec<(String, String)> = shortcuts().into_iter().map(|(s, a)| (ctx.format_shortcut(&s), describe(&a))).collect();
+    let mut rows: Vec<(String, String)> = shortcuts().into_iter().map(|(s, a)| (format(ctx, &s), describe(&a))).collect();
+    for a in [Action::Undo, Action::Redo, Action::Cut, Action::Copy, Action::Paste, Action::SelectAll, Action::ZoomIn, Action::ZoomOut, Action::ZoomReset] {
+        rows.extend(fixed_shortcut(&a).map(|k| (k.to_string(), describe(&a))));
+    }
     for (k, d) in [
-        ("Ctrl++ / Ctrl+-", "Zoom in / out"),
-        ("Ctrl+0", "Reset zoom"),
-        ("Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"),
+        ("Ctrl+Y", "Redo"),
         ("Ctrl+click", "Open link"),
         ("Enter / Shift+Enter", "Next / previous match (in find bar)"),
         ("Esc", "Close find bar"),
@@ -294,24 +300,25 @@ fn describe(a: &Action) -> String {
         Action::Format(c) => match c {
             Command::Heading(0) => "Paragraph".into(),
             Command::Heading(n) => format!("Heading {n}"),
-            other => format!("{other:?}"),
+            other => words(&format!("{other:?}")),
         },
         Action::InsertTableDialog => "Insert table".into(),
-        other => {
-            let s = format!("{other:?}");
-            // CamelCase → words.
-            let mut out = String::new();
-            for (i, ch) in s.chars().enumerate() {
-                if i > 0 && ch.is_uppercase() {
-                    out.push(' ');
-                    out.extend(ch.to_lowercase());
-                } else {
-                    out.push(ch);
-                }
-            }
-            out
+        other => words(&format!("{other:?}")),
+    }
+}
+
+/// CamelCase → words.
+fn words(s: &str) -> String {
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && ch.is_uppercase() {
+            out.push(' ');
+            out.extend(ch.to_lowercase());
+        } else {
+            out.push(ch);
         }
     }
+    out
 }
 
 #[cfg(test)]
@@ -346,5 +353,6 @@ mod tests {
     fn describe_actions() {
         assert_eq!(describe(&Action::ToggleSidebar), "Toggle sidebar");
         assert_eq!(describe(&Action::Format(Command::Heading(2))), "Heading 2");
+        assert_eq!(describe(&Action::Format(Command::BlockQuote)), "Block quote");
     }
 }

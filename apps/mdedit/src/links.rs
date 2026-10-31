@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
+pub use mdedit_syntax::slugify;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum LinkAction {
     /// Hand to the desktop (http, https, mailto).
@@ -93,19 +95,6 @@ fn scheme_of(url: &str) -> Option<&str> {
     }
     // A single letter before ':' would be a Windows drive; treat it as a scheme anyway (refused).
     Some(scheme)
-}
-
-/// GitHub-style heading slug: lowercase, keep alphanumerics, `-` and `_`, spaces → `-`.
-pub fn slugify(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.trim().chars() {
-        if c.is_alphanumeric() || c == '_' || c == '-' {
-            out.extend(c.to_lowercase());
-        } else if c.is_whitespace() {
-            out.push('-');
-        }
-    }
-    out
 }
 
 /// A `mailto:` link may only carry `subject`, `body`, `cc`, `bcc` and `to` query fields:

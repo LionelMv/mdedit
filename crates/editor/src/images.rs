@@ -125,24 +125,9 @@ pub(crate) enum ImageSource {
     Unresolvable,
 }
 
-/// Decode `%XX` escapes (invalid escapes are kept as written).
+/// Decode `%XX` escapes; text that can't be decoded is kept as written.
 fn percent_decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            let hex = |c: u8| (c as char).to_digit(16);
-            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
-                out.push((h * 16 + l) as u8);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(b[i]);
-        i += 1;
-    }
-    String::from_utf8(out).unwrap_or_else(|_| s.to_owned())
+    mdedit_buffer::fsutil::percent_decode(s).unwrap_or_else(|| s.to_owned())
 }
 
 /// Resolve `url` (as written in the Markdown) against `base_dir`.

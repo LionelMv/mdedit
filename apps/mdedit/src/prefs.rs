@@ -2,7 +2,7 @@
 
 use mdedit_workspace::Config;
 
-/// Draw the window. Returns `true` when the window was closed this frame.
+/// Draw the window. Hand-edited values outside the widgets' ranges stay as they are. Returns `true` when the window was closed this frame.
 pub fn preferences_window(ctx: &egui::Context, open: &mut bool, cfg: &mut Config) -> bool {
     let was_open = *open;
     let mut close_clicked = false;
@@ -23,15 +23,15 @@ pub fn preferences_window(ctx: &egui::Context, open: &mut bool, cfg: &mut Config
             ui.end_row();
 
             ui.label("Body font size");
-            ui.add(egui::Slider::new(&mut cfg.body_size, 10.0..=32.0).step_by(0.5).suffix(" pt"));
+            ui.add(egui::Slider::new(&mut cfg.body_size, 10.0..=32.0).clamping(egui::SliderClamping::Never).step_by(0.5).suffix(" pt"));
             ui.end_row();
 
             ui.label("Code font size");
-            ui.add(egui::Slider::new(&mut cfg.code_size, 9.0..=28.0).step_by(0.5).suffix(" pt"));
+            ui.add(egui::Slider::new(&mut cfg.code_size, 9.0..=28.0).clamping(egui::SliderClamping::Never).step_by(0.5).suffix(" pt"));
             ui.end_row();
 
             ui.label("Line height");
-            ui.add(egui::Slider::new(&mut cfg.line_height, 1.0..=2.5).step_by(0.05));
+            ui.add(egui::Slider::new(&mut cfg.line_height, 1.0..=2.5).clamping(egui::SliderClamping::Never).step_by(0.05));
             ui.end_row();
 
             ui.label("Max text width");
@@ -41,14 +41,14 @@ pub fn preferences_window(ctx: &egui::Context, open: &mut bool, cfg: &mut Config
                     cfg.max_width = if full { 0.0 } else { 820.0 };
                 }
                 if !full {
-                    ui.add(egui::Slider::new(&mut cfg.max_width, 400.0..=2000.0).step_by(10.0).suffix(" pt"));
+                    ui.add(egui::Slider::new(&mut cfg.max_width, 400.0..=2000.0).clamping(egui::SliderClamping::Never).step_by(10.0).suffix(" pt"));
                 }
             });
             ui.end_row();
 
             ui.label("Recovery snapshot every");
             ui.horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut cfg.autosave_secs).range(0..=3600).suffix(" s"));
+                ui.add(egui::DragValue::new(&mut cfg.autosave_secs).range(0..=3600).clamp_existing_to_range(false).suffix(" s"));
                 ui.weak("(0 = off)");
             });
             ui.end_row();

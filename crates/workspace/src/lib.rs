@@ -204,7 +204,7 @@ impl Config {
     /// Load from an explicit file; missing or invalid → defaults (logged). (Added API.)
     pub fn load_from(path: &Path) -> Self {
         match std::fs::read_to_string(path) {
-            Ok(s) => toml::from_str(&s).unwrap_or_else(|e| {
+            Ok(s) => toml::from_str::<Self>(&s).map(Self::without_nan).unwrap_or_else(|e| {
                 log::warn!("invalid config {}: {e}; using defaults", path.display());
                 Self::default()
             }),
@@ -214,6 +214,17 @@ impl Config {
                 Self::default()
             }
         }
+    }
+    /// NaN or infinite sizes become defaults: NaN never equals itself, so it would look like an
+    /// unsaved change forever.
+    fn without_nan(mut self) -> Self {
+        let d = Self::default();
+        for (v, default) in [(&mut self.body_size, d.body_size), (&mut self.code_size, d.code_size), (&mut self.line_height, d.line_height), (&mut self.max_width, d.max_width)] {
+            if !v.is_finite() {
+                *v = default;
+            }
+        }
+        self
     }
     /// Save to an explicit file (atomic write, parent dirs created). (Added API.)
     pub fn save_to(&self, path: &Path) -> io::Result<()> {
@@ -329,6 +340,11 @@ mod tests {
         let l = Config::load_from(&p);
         assert_eq!(l.theme, "light");
         assert_eq!(l.autosave_secs, 30);
+        // NaN → that field's default, and equal to itself.
+        std::fs::write(&p, "body_size = nan\ntheme = \"dark\"\n").unwrap();
+        let l = Config::load_from(&p);
+        assert_eq!((l.body_size, l.theme.as_str()), (Config::default().body_size, "dark"));
+        assert_eq!(l, l.clone());
         // Invalid → defaults.
         std::fs::write(&p, "theme = [[[").unwrap();
         assert_eq!(Config::load_from(&p), Config::default());

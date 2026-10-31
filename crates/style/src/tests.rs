@@ -770,3 +770,118 @@ fn chunk_inside_a_list_has_no_outside_decorations() {
         assert_eq!((cards > 0, bullets), (want_card, want_bullets), "{r:?}: {:?}", s.decorations);
     }
 }
+
+/// A chunk's result must not depend on how the blocks outside it were skipped: compare with the
+/// same chunk styled when it is the whole container's only overlap with a smaller document.
+fn job_of(s: &StyledChunk) -> Vec<(String, Color32, f32)> {
+    s.job.sections.iter().map(|x| (s.job.text[br(x)].to_string(), x.format.color, x.format.font_id.size)).collect()
+}
+
+#[test]
+fn container_chunks_style_like_the_same_lines_alone() {
+    let cases = [
+        ("list", (0..500).map(|i| format!("- item {i} with *em* and [a](http://b)\n")).collect::<String>()),
+        ("task list", (0..500).map(|i| format!("- [x] done {i}\n  - nested `{i}`\n")).collect::<String>()),
+        ("quote", (0..500).map(|i| format!("> line {i} **b**\n")).collect::<String>()),
+        ("quote in list", (0..300).map(|i| format!("- a {i}\n\n  > q {i}\n\n")).collect::<String>()),
+    ];
+    for (name, text) in cases {
+        let blocks = mdedit_syntax::parse(&text);
+        assert_eq!(blocks.len(), 1, "{name}");
+        // The first item's chunk, and an identical-shaped one in a one-item document.
+        let mid = text.len() / 2;
+        let s = mid + text[mid..].find('\n').unwrap() + 1;
+        let e = s + text[s..].find('\n').unwrap() + 1;
+        let chunk = Chunk { range: s..e, block: Some(0) };
+        let piece = style(&text, &blocks, &chunk, Mode::LivePreview, false, &Theme::light());
+        assert_eq!(piece.job.text, text[s..e - 1], "{name}: contract");
+        let alone_text = text[s..e].to_string();
+        let alone_blocks = mdedit_syntax::parse(&alone_text);
+        if alone_blocks.len() == 1 && !alone_text.starts_with(' ') {
+            let alone = style(&alone_text, &alone_blocks, &Chunk { range: 0..alone_text.len(), block: Some(0) }, Mode::LivePreview, false, &Theme::light());
+            assert_eq!(job_of(&piece), job_of(&alone), "{name}");
+        }
+    }
+}
+
+#[test]
+fn big_container_chunk_costs_about_the_same_as_a_small_one() {
+    let cost = |n: usize, line: &dyn Fn(usize) -> String| {
+        let text: String = (0..n).map(line).collect();
+        let blocks = mdedit_syntax::parse(&text);
+        let s = text.len() / 2;
+        let s = s + text[s..].find('\n').unwrap() + 1;
+        let e = s + text[s..].find('\n').unwrap() + 1;
+        let chunk = Chunk { range: s..e, block: Some(0) };
+        (0..21)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                std::hint::black_box(style(&text, &blocks, &chunk, Mode::LivePreview, false, &Theme::light()));
+                t.elapsed()
+            })
+            .min()
+            .unwrap()
+    };
+    let list = |i: usize| format!("- item {i} with *em*\n");
+    let quote = |i: usize| format!("> line {i}\n");
+    for (name, f) in [("list", &list as &dyn Fn(usize) -> String), ("quote", &quote)] {
+        let (small, big) = (cost(1_000, f), cost(50_000, f));
+        // 50x the container: linear behaviour would be ~50x. Generous for noisy machines.
+        assert!(big < small * 15 + std::time::Duration::from_micros(200), "{name}: {small:?} vs {big:?}");
+    }
+}
+
+#[test]
+fn pieces_of_a_code_block_and_pending_highlights_are_volatile() {
+    let text = "```rust\nfn a() {}\nfn b() {}\n```\n";
+    let blocks = mdedit_syntax::parse(text);
+    let whole = Chunk { range: 0..text.len(), block: Some(0) };
+    assert!(!style(text, &blocks, &whole, Mode::LivePreview, false, &Theme::light()).hl_volatile);
+    let piece = Chunk { range: 0..18, block: None };
+    assert!(style(text, &blocks, &piece, Mode::LivePreview, false, &Theme::light()).hl_volatile, "other pieces can change its colours");
+
+    let bg = Highlighter::new();
+    let theme = Theme::light();
+    let input = StyleInput { text, blocks: &blocks, chunk: &whole, mode: Mode::LivePreview, focused: false, theme: &theme, highlighter: &bg, wrap_width: 600.0 };
+    let first = style_chunk(&input);
+    assert!(first.hl_volatile, "a miss is pending: it never computes here");
+    let code_colours = |s: &StyledChunk| job_of(s).into_iter().filter(|x| x.0.trim().chars().any(char::is_alphabetic) && !x.0.contains("```")).map(|x| x.1).collect::<std::collections::HashSet<_>>();
+    assert_eq!(code_colours(&first), std::collections::HashSet::from([theme.code_text]), "plain meanwhile");
+    assert!(bg.wait_idle(std::time::Duration::from_secs(60)));
+    let done = style_chunk(&input);
+    assert!(!done.hl_volatile, "final result");
+    assert!(job_of(&done).iter().map(|x| x.1).collect::<std::collections::HashSet<_>>().len() >= 2, "highlighted");
+}
+
+#[test]
+fn only_the_row_below_the_header_is_the_delimiter() {
+    let text = "| a | b |\n|---|---|\n| - | - |\n| x \\| y | z |\n";
+    let blocks = mdedit_syntax::parse(text);
+    let t = Theme::light();
+    let hl = Highlighter::new();
+    let chunk = Chunk { range: 0..text.len(), block: Some(0) };
+    let s = style_chunk(&StyleInput { text, blocks: &blocks, chunk: &chunk, mode: Mode::LivePreview, focused: false, theme: &t, highlighter: &hl, wrap_width: 500.0 });
+    let size_at = |at: usize| s.job.sections.iter().find(|x| x.byte_range.start.0 <= at && at < x.byte_range.end.0).unwrap().format.font_id.size;
+    let body_row = text.find("| - |").unwrap();
+    assert!(size_at(body_row + 2) > 1.0, "a body row of dashes stays visible");
+    assert!(size_at(text.find("|---").unwrap()) < 1.0, "the delimiter row is hidden");
+    let colour_at = |at: usize| s.job.sections.iter().find(|x| x.byte_range.start.0 <= at && at < x.byte_range.end.0).unwrap().format.color;
+    assert_ne!(colour_at(text.find("\\|").unwrap() + 1), Color32::TRANSPARENT, "an escaped pipe is cell text");
+}
+
+#[test]
+fn a_split_code_block_has_one_header() {
+    let text = format!("```rust\n{}```\n", "let x = 1;\n".repeat(4000));
+    let blocks = mdedit_syntax::parse(&text);
+    let t = Theme::light();
+    let hl = Highlighter::new();
+    let headers = |range: std::ops::Range<usize>| {
+        let chunk = Chunk { range, block: Some(0) };
+        style_chunk(&StyleInput { text: &text, blocks: &blocks, chunk: &chunk, mode: Mode::LivePreview, focused: false, theme: &t, highlighter: &hl, wrap_width: 500.0 })
+            .decorations.iter().filter(|d| matches!(d, Decoration::CodeHeader { .. })).count()
+    };
+    let cut = text.len() / 2;
+    let cut = cut + text[cut..].find('\n').unwrap() + 1;
+    assert_eq!(headers(0..cut), 1);
+    assert_eq!(headers(cut..text.len()), 0);
+}

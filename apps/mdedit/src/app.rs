@@ -155,8 +155,27 @@ impl MdApp {
 
     // ---------------------------------------------------------------- tabs
 
+    fn initial_mode(&self) -> Mode {
+        if self.config.source_mode { Mode::Source } else { Mode::LivePreview }
+    }
+
+    /// Put `doc` in the active tab if that is a pristine untitled one (instead of piling up
+    /// empty tabs), else in a new tab.
+    fn place_doc(&mut self, doc: Document) -> usize {
+        if !self.tabs.get(self.active).is_some_and(Tab::is_pristine) {
+            return self.push_tab(doc);
+        }
+        let mode = self.initial_mode();
+        let id = self.new_tab_id();
+        let recovery_id = self.tabs[self.active].recovery_id.clone();
+        let mut t = Tab::new(id, doc, mode);
+        t.recovery_id = recovery_id;
+        self.tabs[self.active] = t;
+        self.active
+    }
+
     fn push_tab(&mut self, doc: Document) -> usize {
-        let mode = if self.config.source_mode { Mode::Source } else { Mode::LivePreview };
+        let mode = self.initial_mode();
         let id = self.new_tab_id();
         self.tabs.push(Tab::new(id, doc, mode));
         self.tabs.len() - 1
@@ -237,12 +256,15 @@ impl MdApp {
     fn open_target(&mut self, f: &Path) {
         if f.exists() {
             self.open_path(f);
-        } else {
-            let mut doc = Document::new();
-            doc.path = Some(f.to_path_buf());
-            let idx = self.push_tab(doc);
-            self.activate(idx);
+            return;
         }
+        let path = crate::cli::absolutize(f);
+        let idx = self.find_tab_by_path(&path).unwrap_or_else(|| {
+            let mut doc = Document::new();
+            doc.path = Some(path);
+            self.push_tab(doc)
+        });
+        self.activate(idx);
     }
 
     /// Open a file (or switch to its tab).
@@ -267,19 +289,7 @@ impl MdApp {
             }
         };
         let disk_hash = tabs::hash_text(&doc.buffer.text());
-        // Replace a pristine untitled tab instead of piling up empty ones.
-        let reuse = self.tabs.get(self.active).is_some_and(Tab::is_pristine);
-        let idx = if reuse {
-            let mode = if self.config.source_mode { Mode::Source } else { Mode::LivePreview };
-            let id = self.new_tab_id();
-            let recovery_id = self.tabs[self.active].recovery_id.clone();
-            let mut t = Tab::new(id, doc, mode);
-            t.recovery_id = recovery_id;
-            self.tabs[self.active] = t;
-            self.active
-        } else {
-            self.push_tab(doc)
-        };
+        let idx = self.place_doc(doc);
         let tab = &mut self.tabs[idx];
         tab.disk_hash = Some(disk_hash);
         if size > LARGE_FILE_BYTES {
@@ -372,7 +382,11 @@ impl MdApp {
         if self.config != self.saved_config {
             match self.config.save() {
                 Ok(()) => self.saved_config = self.config.clone(),
-                Err(e) => self.toasts.error(format!("Can't save preferences: {e}")),
+                Err(e) => {
+                    self.toasts.error(format!("Can't save preferences: {e}"));
+                    // Try again at the next change, not every frame.
+                    self.saved_config = self.config.clone();
+                }
             }
         }
     }
@@ -660,15 +674,7 @@ impl MdApp {
                     };
                     doc.path = s.path.clone();
                     let disk_hash = s.path.as_deref().filter(|p| p.is_file()).map(|_| tabs::hash_text(&doc.buffer.text()));
-                    let i = if self.tabs.get(self.active).is_some_and(Tab::is_pristine) {
-                        let _ = recovery::remove(&self.tabs[self.active].recovery_id);
-                        let id = self.new_tab_id();
-                        let mode = self.tabs[self.active].editor.mode;
-                        self.tabs[self.active] = Tab::new(id, doc, mode);
-                        self.active
-                    } else {
-                        self.push_tab(doc)
-                    };
+                    let i = self.place_doc(doc);
                     self.tabs[i].disk_hash = disk_hash;
                     if let (Some(w), Some(p)) = (self.watcher.as_mut(), s.path.as_deref()) {
                         w.watch(p);
@@ -1013,7 +1019,7 @@ impl eframe::App for MdApp {
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
             if self.tabs.iter().any(|t| t.doc.is_dirty()) {
                 ctx.send_viewport_cmd(ViewportCommand::CancelClose);
-                if !self.quitting {
+                if self.pending_close.is_none() {
                     self.request_quit(&ctx);
                 }
             } else {
@@ -1138,6 +1144,10 @@ impl eframe::App for MdApp {
                     }
                 }
                 Some(name) => match dialogs::unsaved_changes_modal(&ctx, &name) {
+                    Some(SaveChoice::Save) if self.dialog_busy && self.tab_index(pc.tab_id).is_some_and(|i| self.tabs[i].doc.path.is_none()) => {
+                        // Save As can't open a second dialog: keep asking.
+                        self.toasts.error("Close the open file dialog first");
+                    }
                     Some(SaveChoice::Save) => {
                         self.pending_close = None;
                         let has_path = self.tab_index(pc.tab_id).is_some_and(|i| self.tabs[i].doc.path.is_some());

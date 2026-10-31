@@ -99,3 +99,22 @@ pub fn atomic_write(path: &Path, data: &[u8], force_mode: Option<u32>) -> io::Re
     }
     Ok(())
 }
+
+/// Decode `%XX` escapes; `None` if the result is not UTF-8 or an escape is malformed.
+pub fn percent_decode(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = bytes.get(i + 1..i + 3)?;
+            let hex = std::str::from_utf8(hex).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}

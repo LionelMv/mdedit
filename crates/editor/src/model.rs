@@ -4,6 +4,8 @@
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
+pub(crate) use mdedit_syntax::floor_boundary;
+use mdedit_syntax::line_start;
 use mdedit_syntax::{Block, BlockKind};
 
 /// Chunks bigger than this are split at line boundaries for display, so a huge code block
@@ -27,15 +29,6 @@ impl DChunk {
             self.range.end
         }
     }
-}
-
-/// Round `at` down to a char boundary inside `text`.
-pub(crate) fn floor_boundary(text: &str, at: usize) -> usize {
-    let mut at = at.min(text.len());
-    while at > 0 && !text.is_char_boundary(at) {
-        at -= 1;
-    }
-    at
 }
 
 /// Validate the style crate's chunks (contiguous cover, char boundaries) and turn them into
@@ -267,11 +260,6 @@ fn nested_code(b: &Block) -> Vec<Range<usize>> {
         walk(b, &mut out);
     }
     out
-}
-
-fn line_start(text: &str, at: usize) -> usize {
-    let at = floor_boundary(text, at);
-    text.as_bytes()[..at].iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1)
 }
 
 /// After the line containing `end` and any blank lines that follow it.

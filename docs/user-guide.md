@@ -15,7 +15,8 @@ saved exactly as they were.
 - **Reopening:** the files you had open last time come back when you start mdedit, with the same
   tab active. This can also be turned off in Preferences.
 - **New document:** File → New (Ctrl+N), or the **+** button after the last tab.
-- **Save:** Ctrl+S. **Save As:** Ctrl+Shift+S.
+- **Save:** Ctrl+S. **Save As:** Ctrl+Shift+S. **Quit:** Ctrl+Q.
+- **Undo:** Ctrl+Z. **Redo:** Ctrl+Shift+Z or Ctrl+Y.
 - **Export:** File → Export HTML… writes a standalone `.html` file. File → Copy as HTML puts
   the HTML on the clipboard, ready to paste into an email or web editor.
 - **Very large files** (over 20 MB) open in Source mode for speed. Ctrl+E switches to live
