@@ -189,6 +189,20 @@ fn heading_setext() {
     assert_eq!(cmd("Ti|tle\n---", Command::Heading(2)).unwrap(), "Ti|tle");
 }
 
+#[test]
+fn heading_setext_several_lines() {
+    assert_eq!(cmd("a\nb|\n===", Command::Heading(2)).unwrap(), "## a b|");
+    assert_eq!(cmd("a  \n  b|\n===\nc", Command::Heading(2)).unwrap(), "## a b|\nc");
+    assert_eq!(cmd("> a\n> b|\n> ===", Command::Heading(2)).unwrap(), "> ## a b|");
+    assert_eq!(cmd("a\nb|\n===", Command::Heading(1)).unwrap(), "a\nb|");
+}
+
+#[test]
+fn heading_setext_starting_with_hash() {
+    assert_eq!(cmd("#ta|g\n===", Command::Heading(2)).unwrap(), "## #ta|g");
+    assert_eq!(cmd("####### x|\n===", Command::Heading(2)).unwrap(), "## ####### x|");
+}
+
 // ----- line prefixes -----
 
 #[test]
@@ -251,6 +265,17 @@ fn code_block_toggle_off() {
 }
 
 #[test]
+fn code_block_toggle_off_indented() {
+    assert_eq!(cmd("  ```\n  co|de\n  b\n  ```", Command::CodeBlock).unwrap(), "co|de\nb");
+    assert_eq!(cmd("   ```\n     co|de\n b\n\n   ```\n", Command::CodeBlock).unwrap(), "  co|de\nb\n\n");
+    assert_eq!(cmd("  ```\n  co|de", Command::CodeBlock).unwrap(), "co|de");
+    assert_eq!(cmd("> ```\n> a\n>   ```|", Command::CodeBlock).unwrap(), "> a|");
+    assert_eq!(cmd(">   ```\n>   co|de\n>   b\n>   ```", Command::CodeBlock).unwrap(), "> co|de\n> b");
+    assert_eq!(cmd("- x\n\n    ```\n    a|\n    b\n    ```", Command::CodeBlock).unwrap(), "- x\n\n  a|\n  b");
+    assert_eq!(cmd("  ```|\n  ```", Command::CodeBlock).unwrap(), "|");
+}
+
+#[test]
 fn code_block_toggle_off_in_containers() {
     assert_eq!(cmd("> ```\n> co|de\n> ```", Command::CodeBlock).unwrap(), "> co|de");
     assert_eq!(cmd("> ```\n> |a\n> b\n> ```", Command::CodeBlock).unwrap(), "> |a\n> b");
@@ -307,6 +332,13 @@ fn enter_continues_bullets() {
     assert_eq!(enter("* one|").unwrap(), "* one\n* |");
     assert_eq!(enter("  - nested|").unwrap(), "  - nested\n  - |");
     assert_eq!(enter("- sp|lit").unwrap(), "- sp\n- |lit");
+}
+
+#[test]
+fn enter_inside_checkbox_keeps_it_whole() {
+    assert_eq!(enter("- [|x] y").unwrap(), "- [x] \n- [ ] |y");
+    assert_eq!(enter("- [x|] y").unwrap(), "- [x] \n- [ ] |y");
+    assert_eq!(enter("- [ ]| y").unwrap(), "- [ ] \n- [ ] |y");
 }
 
 #[test]

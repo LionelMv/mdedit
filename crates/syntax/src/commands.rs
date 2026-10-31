@@ -572,6 +572,12 @@ fn link(text: &str, blocks: &[Block], sel: Sel, image: bool) -> Option<CommandRe
     finish(text, vec![edit(s..e, ins)], us, us + 3)
 }
 
+/// Number of `#`s if `s` starts with an ATX heading marker.
+fn atx_hashes(s: &str) -> Option<usize> {
+    let hashes = s.bytes().take_while(|&b| b == b'#').count();
+    ((1..=6).contains(&hashes) && matches!(s.as_bytes().get(hashes), None | Some(b' ' | b'\t'))).then_some(hashes)
+}
+
 fn heading(text: &str, blocks: &[Block], sel: Sel, level: u8) -> Option<CommandResult> {
     let c = sel.head;
     if in_code_content(text, blocks, c) {
@@ -583,7 +589,7 @@ fn heading(text: &str, blocks: &[Block], sel: Sel, level: u8) -> Option<CommandR
         && let BlockKind::Heading { level: cur } = b.kind {
             let first = &text[b.range.clone()];
             let pre = quote_prefix_len(first);
-            if !first[pre..].trim_start().starts_with('#') {
+            if atx_hashes(first[pre..].trim_start()).is_none() {
                 let underline_ls = line_start(text, b.range.end);
                 if underline_ls > b.range.start {
                     let cut_from = line_end_no_cr(text, underline_ls.saturating_sub(1));
@@ -592,6 +598,15 @@ fn heading(text: &str, blocks: &[Block], sel: Sel, level: u8) -> Option<CommandR
                     if target > 0 {
                         let at = b.range.start;
                         edits.insert(0, edit(at..at, format!("{} ", "#".repeat(target as usize))));
+                        // an ATX heading is one line: join the title's lines
+                        let mut le = line_end_no_cr(text, at);
+                        while le < cut_from {
+                            let next = le + 1;
+                            let skip = text[next..].bytes().take_while(|b| matches!(b, b' ' | b'\t' | b'>')).count();
+                            let from = text[at..le].trim_end().len() + at;
+                            edits.insert(edits.len() - 1, edit(from..next + skip, " "));
+                            le = line_end_no_cr(text, next);
+                        }
                     }
                     return finish_mapped(text, edits, Sel::caret(c.min(cut_from)));
                 }
@@ -614,9 +629,7 @@ fn heading(text: &str, blocks: &[Block], sel: Sel, level: u8) -> Option<CommandR
         None => indent.min(3),
     };
     let rest = &after_q[ws..];
-    let hashes = rest.bytes().take_while(|&b| b == b'#').count();
-    let is_atx = (1..=6).contains(&hashes) && matches!(rest.as_bytes().get(hashes), None | Some(b' ' | b'\t'));
-    let (cur, mstart, mend) = if is_atx {
+    let (cur, mstart, mend) = if let Some(hashes) = atx_hashes(rest) {
         let sp = rest[hashes..].bytes().take_while(|&b| b == b' ' || b == b'\t').count();
         (hashes as u8, ls + qp + ws, ls + qp + ws + hashes + sp)
     } else {
@@ -776,12 +789,17 @@ fn fenced_block(text: &str, blocks: &[Block], sel: Sel, ch: char) -> Option<Comm
             let of = info.open_fence.clone()?;
             let mut edits = Vec::new();
             let content_start = b.content.start;
+            let path = block_path(blocks, s);
+            // the fence's indent, past its containers, goes with it from every line
+            let fence_ls = line_start(text, of.start);
+            let owned = container_prefix(text, &path, &(fence_ls..line_end_no_cr(text, of.start)), 0).len;
+            let indent = (fence_ls + owned..of.start).len();
             // the fence's own prefix stays, so drop the first content line's copy of it
             let has_content = content_start > of.end
                 && info.close_fence.as_ref().is_none_or(|cf| content_start < line_start(text, cf.start));
             let dup = if has_content {
                 let first = content_start..line_end_no_cr(text, content_start);
-                container_prefix(text, &block_path(blocks, s), &first, 0).len
+                container_prefix(text, &path, &first, indent).len
             } else {
                 0
             };
@@ -790,15 +808,24 @@ fn fenced_block(text: &str, blocks: &[Block], sel: Sel, ch: char) -> Option<Comm
                 Some(cf) => {
                     let cls = line_start(text, cf.start);
                     let ce = b.content.end.max(open_end);
-                    edits.push(edit(of.start..open_end, ""));
+                    edits.push(edit(of.start - indent..open_end, ""));
+                    if indent > 0 && ce > open_end {
+                        let mut ls = line_end_no_cr(text, open_end) + 1;
+                        while ls < ce {
+                            let l = ls..line_end_no_cr(text, ls);
+                            let from = ls + container_prefix(text, &path, &l, 0).len;
+                            edits.push(edit(from..ls + container_prefix(text, &path, &l, indent).len, ""));
+                            ls = l.end + 1;
+                        }
+                    }
                     // remove the newline before the closing fence line and the fence itself
                     if ce < cf.start && cls > content_start {
                         edits.push(edit(ce..cf.end, ""));
                     } else {
-                        edits.push(edit(cf.start..cf.end, ""));
+                        edits.push(edit(cf.start - indent.min(cf.start - cls)..cf.end, ""));
                     }
                 }
-                None => edits.push(edit(of.start..open_end, "")),
+                None => edits.push(edit(of.start - indent..open_end, "")),
             }
             return finish_mapped(text, edits, sel);
         }
@@ -1003,6 +1030,8 @@ fn enter_list(text: &str, item: &Block, list: Option<&Block>, c: usize) -> Optio
     if c < content_start.min(le) && c < start + m.after {
         return None;
     }
+    // inside the checkbox: split after it, so that it stays whole
+    let c = if m.task.is_some() { c.max(content_start.min(le)) } else { c };
     let raw_prefix = &text[ls..start];
     let prefix = continuation_prefix(raw_prefix);
     let rest_of_item = &text[content_start.min(item.range.end)..item.range.end];
