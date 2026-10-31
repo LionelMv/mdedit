@@ -25,6 +25,8 @@ rfd.workspace = true
 open.workspace = true
 log.workspace = true
 env_logger.workspace = true
+# Streaming, so that a download can stop at the size limit; the same version egui_extras uses.
+ehttp = { version = "0.7", features = ["streaming"] }
 # Only to build the SVG loader's options; the same version egui_extras renders with.
 resvg = { version = "0.45", default-features = false }
 # Only to enable colour emoji (COLR/CBDT) rendering in egui's text stack.

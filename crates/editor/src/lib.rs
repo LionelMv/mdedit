@@ -765,6 +765,7 @@ impl EditorState {
                         Ok(egui::load::TexturePoll::Pending { size }) => {
                             (size.map_or(vec2(max_w, IMAGE_PLACEHOLDER_H), |s| fit(s, max_w)), None, format!("Loading {label}…"))
                         }
+                        Err(egui::load::LoadError::Loading(why)) => (vec2(max_w, IMAGE_PLACEHOLDER_H), None, format!("{label} ({why})")),
                         Err(_) => (vec2(max_w, IMAGE_PLACEHOLDER_H), None, format!("Image not found: {label}")),
                         },
                     }

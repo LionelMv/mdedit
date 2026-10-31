@@ -91,6 +91,7 @@ impl MdApp {
         let ctx = &cc.egui_ctx;
         egui_extras::install_image_loaders(ctx);
         crate::svg_loader::install(ctx);
+        crate::http_loader::install(ctx);
         ctx.set_fonts(crate::fonts::system_font_definitions());
         std::thread::spawn(Highlighter::preload);
 

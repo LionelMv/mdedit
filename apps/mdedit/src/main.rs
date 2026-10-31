@@ -5,6 +5,7 @@ mod cli;
 mod dialogs;
 mod find;
 mod fonts;
+mod http_loader;
 mod links;
 mod menu;
 mod prefs;
