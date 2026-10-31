@@ -5,8 +5,8 @@
 #
 # Needs podman (recommended: rootless, files stay yours) or docker.
 # Output: target/ubuntu-24.04/debian/mdedit_<version>_amd64.deb
-# The Rust toolchain and crates are cached in the volume "mdedit-deb-cargo"; remove it with
-# `podman volume rm mdedit-deb-cargo` to start fresh.
+# Rust and the crates are cached in the volumes "mdedit-deb-cargo" and "mdedit-deb-rustup"; remove
+# them with `podman volume rm mdedit-deb-cargo mdedit-deb-rustup` to start fresh.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -20,6 +20,7 @@ fi
 "${ENGINE}" run --rm \
     -v "${ROOT}:/src:Z" -w /src \
     -v mdedit-deb-cargo:/root/.cargo \
+    -v mdedit-deb-rustup:/root/.rustup \
     -e CARGO_TARGET_DIR=/src/target/ubuntu-24.04 \
     -e HOST_OWNER="$( [ "$(basename "${ENGINE}")" = docker ] && echo "$(id -u):$(id -g)" )" \
     "${IMAGE}" bash -euo pipefail -c '
@@ -29,7 +30,8 @@ fi
         if ! command -v cargo >/dev/null; then
             curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path
         fi
-        rustup update stable --no-self-update >/dev/null 2>&1 || true
+        rustup toolchain install stable --profile minimal --no-self-update
+        rustup default stable
         cargo deb --version >/dev/null 2>&1 || cargo install cargo-deb --locked
         cargo deb -p mdedit --locked
         # Docker runs as real root: hand the output back to the host user. (Under rootless
