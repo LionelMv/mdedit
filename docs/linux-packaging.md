@@ -37,5 +37,5 @@ StartupWMClass=mdedit
 
 - Test matrix: Ubuntu LTS (GNOME/Wayland), Fedora (GNOME), Kubuntu/KDE (Wayland),
   Sway, an X11 session (e.g. Xfce).
-- Verify: HiDPI fractional scaling, IME (fcitx5, IBus), drag-and-drop of files
+- Verify: HiDPI fractional scaling, IME (fcitx5, IBus; steps in [manual-checks.md](manual-checks.md)), drag-and-drop of files
   from the file manager, clipboard image paste, dark mode switching, portal dialogs in Flatpak.

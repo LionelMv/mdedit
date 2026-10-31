@@ -57,3 +57,27 @@ by launchers for the process they start). The later `mdedit` would forward its t
 window would call `xdg_activation_v1.activate(token, surface)` on its own Wayland connection.
 winit 0.30 offers no API for that, and reaching its connection from outside needs `unsafe`, which
 this project forbids. Revisit when winit exposes it.
+
+## 6. Remote images: decoded before their size is checked
+
+Only with **Remote images** turned on (off by default). Local files are safe: their header is
+checked first (`check_local` in `crates/editor/src/images.rs`).
+
+- **The problem:** a remote PNG or similar can be small to download but claim huge dimensions. The
+  20 MB download limit doesn't help, because `check_decoded` only sees the size after decoding, so
+  the memory has already been used.
+- **Fix:** read the dimensions from the downloaded bytes before decoding, as `embedded_allowed` in
+  `apps/mdedit/src/svg_loader.rs` does for images inside an SVG.
+- **Also:** the download limit in `apps/mdedit/src/http_loader.rs` has only been tested against a
+  local test server. Try it against a real one, over HTTPS and with a redirect.
+
+## 7. Hostile SVGs can use a lot of memory while parsing
+
+**Problem.** A 19 MB SVG built to be as heavy as possible peaked at about 1 GB, and up to four can
+render at once (`MAX_RENDERS` in `apps/mdedit/src/svg_loader.rs`), so about 4 GB at worst. The
+window stays responsive, but a low-memory machine could swap heavily or kill the app. A render
+can't be cancelled either: closing the tab leaves it running until it ends.
+
+**To do, if real use shows a need.** Lower `MAX_SVG_BYTES` from 20 MB to about 5 MB, at the cost of
+refusing very large legitimate SVGs. Rendering one at a time also caps the total, but one slow file
+would then hold up every other SVG.

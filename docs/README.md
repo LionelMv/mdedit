@@ -28,6 +28,7 @@ A WYSIWYG ("live preview") Markdown editor with the feature set of
 | [feature-parity.md](feature-parity.md) | MarkText feature checklist mapped to the phase that delivers it |
 | [code-blocks.md](code-blocks.md) | Full spec for fenced/indented code and inline code: parsing, display, editing, export |
 | [wordcraft-markdown-findings.md](wordcraft-markdown-findings.md) | What's wrong with WordCraft's Markdown code blocks, with code references and a draft upstream issue |
+| [manual-checks.md](manual-checks.md) | Checks that need a real desktop, such as input method composition |
 | [linux-packaging.md](linux-packaging.md) | Desktop integration, MIME types, Flatpak/AppImage/deb |
 
 ## Reading order
