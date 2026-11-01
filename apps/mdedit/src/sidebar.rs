@@ -15,6 +15,11 @@ pub struct Sidebar {
     outline_key: Option<(u64, u64)>,
     outline_last: Option<Instant>,
     outline_pending: Option<(u64, u64)>,
+    /// (tab id, row) the outline last scrolled to, so that it moves only when that changes and
+    /// the wheel can still browse it.
+    followed: Option<(u64, Option<usize>)>,
+    /// Scroll offset and height of the outline last frame.
+    view: (f32, f32),
 }
 
 const OUTLINE_THROTTLE: Duration = Duration::from_millis(400);
@@ -91,11 +96,22 @@ impl Sidebar {
             if self.outline.is_empty() {
                 ui.weak("No headings");
             }
-            let caret = tab.doc.buffer.selection.head;
-            let current = self.outline.iter().rposition(|h| h.at <= caret);
+            let at = tab.editor.reading_at();
+            let current = self.outline.iter().rposition(|h| h.at <= at);
             let row_h = ui.spacing().interact_size.y;
+            let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+            if self.followed != Some((tab.id, current)) {
+                self.followed = Some((tab.id, current));
+                let (offset, height) = self.view;
+                if let Some(i) = current
+                    && height > 0.0
+                {
+                    let top = i as f32 * (row_h + ui.spacing().item_spacing.y);
+                    area = area.vertical_scroll_offset(offset.min(top).max(top + row_h - height));
+                }
+            }
             // Only the visible rows: an outline can have thousands, and this runs every frame.
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, row_h, self.outline.len(), |ui, rows| {
+            let shown = area.show_rows(ui, row_h, self.outline.len(), |ui, rows| {
                 for i in rows {
                     let h = &self.outline[i];
                     ui.horizontal(|ui| {
@@ -109,6 +125,7 @@ impl Sidebar {
                     });
                 }
             });
+            self.view = (shown.state.clamped_offset().y, shown.inner_rect.height());
         }
         (clicked, wake)
     }

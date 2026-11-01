@@ -82,6 +82,7 @@ pub struct EditorState {
     last_theme: Option<Theme>,
     anchor: Anchor,
     view_h: f32,
+    reading_at: usize,
     col_left: f32,
     col_w: f32,
     est_row_h: f32,
@@ -284,6 +285,7 @@ impl EditorState {
             last_theme: None,
             anchor: Anchor { byte: 0, dy: -TOP_PAD },
             view_h: 600.0,
+            reading_at: 0,
             col_left: SIDE_PAD,
             col_w: 700.0,
             est_row_h: 24.0,
@@ -422,6 +424,12 @@ impl EditorState {
             }
             None => false,
         }
+    }
+
+    /// Where the reader is, as a byte offset: the caret while it is on screen, otherwise the
+    /// top of the view. As of the last `show`. STABLE.
+    pub fn reading_at(&self) -> usize {
+        self.reading_at
     }
 
     /// Scroll so byte `at` is visible near the top and put the caret there. STABLE.
@@ -884,6 +892,17 @@ impl EditorState {
         if let Some(v) = vis.iter().find(|v| v.y + v.g.height > viewport.min.y) {
             let byte = self.model.chunks[v.i].range.start;
             self.anchor = Anchor { byte, dy: viewport.min.y - v.y };
+        }
+
+        let mut on_screen = vis.iter().filter(|v| v.y + v.g.height > viewport.min.y && v.y < viewport.max.y).map(|v| &self.model.chunks[v.i].range);
+        let top = on_screen.next().cloned().unwrap_or(0..0);
+        let bottom = on_screen.next_back().map_or(top.end, |r| r.end);
+        let head = doc.buffer.selection.head;
+        let reading_at = if (top.start..=bottom).contains(&head) { head } else { top.start };
+        if reading_at != self.reading_at {
+            self.reading_at = reading_at;
+            // Panels drawn before the editor, like the outline, have seen the old value.
+            ui.ctx().request_repaint();
         }
 
         if has_focus {

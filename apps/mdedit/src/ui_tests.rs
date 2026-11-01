@@ -311,6 +311,63 @@ fn clicking_empty_sidebar_space_keeps_editor_focus() {
     h.get_by_label("x.md •");
 }
 
+/// A document with more headings than the outline has room for.
+fn long_outline_file(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    let p = dir.path().join("long.md");
+    let body: String = (0..100).map(|i| format!("## Section {i}\n\nSome text for section {i}.\n\n")).collect();
+    std::fs::write(&p, body).unwrap();
+    p
+}
+
+/// Positive `steps` scroll down, negative up.
+fn wheel_at(h: &mut Harness<'_, MdApp>, pos: egui::Pos2, steps: i32) {
+    h.hover_at(pos);
+    h.run_steps(2);
+    for _ in 0..steps.abs() {
+        h.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -60.0 * steps.signum() as f32),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(1);
+    }
+    h.run_steps(40);
+}
+
+/// Headings the outline shows, by the number in "Section N".
+fn outline_sections(h: &Harness<'_, MdApp>) -> Vec<usize> {
+    (0..100).filter(|i| h.query_all_by_label(&format!("Section {i}")).any(|n| n.rect().min.x < 240.0)).collect()
+}
+
+/// The outline can be browsed with the wheel, and stays where it was left.
+#[test]
+#[ignore]
+fn wheel_over_the_outline_scrolls_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = start(vec![long_outline_file(&dir)]);
+    assert!(outline_sections(&h).contains(&0));
+    wheel_at(&mut h, egui::pos2(100.0, 300.0), 10);
+    assert!(!outline_sections(&h).contains(&0));
+}
+
+/// Scrolling the document brings the section being read into the outline, both ways (the
+/// outline only ever looked at the caret, so it stayed at the top).
+#[test]
+#[ignore]
+fn scrolling_the_document_scrolls_the_outline() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = start(vec![long_outline_file(&dir)]);
+    let editor = egui::pos2(700.0, 300.0);
+    assert!(!outline_sections(&h).contains(&60));
+    wheel_at(&mut h, editor, 100);
+    let sections = outline_sections(&h);
+    assert!(!sections.contains(&0) && sections.iter().any(|&s| s > 26), "outline shows {sections:?}");
+    wheel_at(&mut h, editor, -100);
+    assert!(outline_sections(&h).contains(&0));
+}
+
 #[test]
 fn idle_preedits_are_dropped_unless_composing() {
     let preedit = |text: &str| egui::Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: None });

@@ -34,7 +34,9 @@ changes. Hover over a tab to see its full path.
 ## The outline sidebar
 
 The sidebar on the left lists the headings of the current document. Click a heading to jump to
-it. The heading you are currently in is highlighted.
+it. The heading you are reading is highlighted, and the outline scrolls to keep it in view as
+you move through the document: the section of the caret while the caret is on screen, otherwise
+the section at the top of the window.
 
 - **Hide it:** the **«** button at the top of the outline, Ctrl+Shift+B, or View → Sidebar.
   It collapses into a thin strip.
